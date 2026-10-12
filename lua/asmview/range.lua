@@ -4,6 +4,12 @@
 
 local M = {}
 
+-- Cap on the treesitter ancestor walk. Real-world source files bottom out at
+-- an AST depth of a few dozen; 1000 is comfortably above anything handwritten
+-- and keeps the loop bounded per rules/algorithmic-complexity.md on
+-- user-controlled input (the buffer the user is viewing).
+local MAX_AST_DEPTH = 1000
+
 ---Return the lines (1-based, inclusive) of the current visual selection in `bufnr`.
 ---Uses marks '< and '>, which are set when leaving visual mode. The caller is
 ---expected to have already left visual mode (user commands run after :<Esc>).
@@ -93,7 +99,9 @@ function M.enclosing_function(bufnr, cursor_line, max_scan)
       local root = trees and trees[1] and trees[1]:root() or nil
       if root then
         local node = root:named_descendant_for_range(cursor_line - 1, 0, cursor_line - 1, 0)
-        while node do
+        local depth = 0
+        while node and depth < MAX_AST_DEPTH do
+          depth = depth + 1
           local kind = node:type()
           if
             kind == "function_definition"
