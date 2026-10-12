@@ -3,50 +3,61 @@
 
 local M = {}
 
-local function check_exe(name)
-  if vim.fn.executable(name) == 1 then
-    vim.health.ok(name .. " found on PATH")
-  else
-    vim.health.warn(name .. " not found on PATH")
-  end
-end
+---Run the health check. Takes an optional deps table so tests can inject
+---a fake `health` surface instead of monkey-patching `vim.health` globally.
+---@param deps? { health?: table, executable?: fun(name:string):integer, config?: table }
+function M.check(deps)
+  deps = deps or {}
+  local health = deps.health or vim.health
+  local executable = deps.executable or vim.fn.executable
 
-function M.check()
-  vim.health.start("asmview.nvim")
-
-  local ok, config = pcall(require, "asmview.config")
-  if not ok then
-    vim.health.error("asmview.config failed to load: " .. tostring(config))
-    return
+  local function check_exe(name)
+    if executable(name) == 1 then
+      health.ok(name .. " found on PATH")
+    else
+      health.warn(name .. " not found on PATH")
+    end
   end
-  vim.health.ok("configuration loaded")
+
+  health.start("asmview.nvim")
+
+  local config = deps.config
+  if not config then
+    local ok, loaded = pcall(require, "asmview.config")
+    if not ok then
+      health.error("asmview.config failed to load: " .. tostring(loaded))
+      return
+    end
+    config = loaded
+  end
+  health.ok("configuration loaded")
 
   local cfg = config.get()
   if not cfg.compilers then
-    vim.health.error("configuration missing compilers table")
+    health.error("configuration missing compilers table")
     return
   end
 
-  vim.health.start("asmview — compilers")
+  health.start("asmview — compilers")
   check_exe(cfg.compilers.c.cmd)
   check_exe(cfg.compilers.cpp.cmd)
   check_exe(cfg.compilers.rust.cmd)
   check_exe(cfg.compilers.go.cmd)
 
-  vim.health.start("asmview — demanglers (optional)")
+  health.start("asmview — demanglers (optional)")
   if cfg.demangle then
     check_exe("c++filt")
     check_exe("rustfilt")
   else
-    vim.health.info("demangle disabled")
+    health.info("demangle disabled")
   end
 
-  vim.health.start("asmview — treesitter")
+  health.start("asmview — treesitter")
   local ok_ts = pcall(require, "vim.treesitter")
   if ok_ts then
-    vim.health.ok("vim.treesitter available (used for function detection)")
+    health.ok("vim.treesitter available (used for function detection)")
   else
-    vim.health.warn("vim.treesitter unavailable — falling back to brace-balanced scan")
+    health.warn("vim.treesitter unavailable — falling back to brace-balanced scan")
   end
 end
 
