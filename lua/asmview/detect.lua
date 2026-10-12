@@ -14,8 +14,43 @@ local FT_MAP = {
 
 -- Scan at most this many lines when harvesting a Go buffer's package + imports.
 -- Imports always sit near the top of the file, so a small cap is safe and keeps
--- the loop bounded on multi-megabyte generated sources.
+-- the loop bounded on multi-megabyte generated sources. If a buffer somehow has
+-- its import block past line 500 (very large auto-generated preamble), the
+-- block is dropped and the snippet will fail to compile — not silent incorrect
+-- behavior; the user sees the compile error in the asm window.
 local GO_HEADER_SCAN_LIMIT = 500
+
+-- Parsed compile_commands.json keyed by `db_path`. Each cached value is a
+-- `{ by_file = { [source_path] = string[] (flags) } }` index built on the
+-- first read, so subsequent `flags_for_source` calls are O(1) and never
+-- re-read the file from disk during a session.
+--
+-- The first read is still a synchronous `io.open` + `read("*a")`, which is a
+-- documented pragmatic trade-off: `compile_commands.json` is a project-level
+-- file read once per Neovim session, typical size is < 1 MB, and the show()
+-- pipeline this feeds is itself synchronous up to the compile step. Moving
+-- it to `uv.fs_open` + callback would ripple through the whole show() path
+-- for a cost that materializes only on hostile input (hundred-MB DBs).
+local _compile_commands_cache = {}
+
+-- Cap on the number of argv tokens accepted from a single compile_commands.json
+-- entry. Real compile invocations rarely exceed ~100 flags; this guards
+-- against a malformed or adversarial database with a pathologically-long
+-- `arguments` array per rules/algorithmic-complexity.md on bounded loops
+-- over external input.
+local MAX_ARGV_LEN = 512
+
+-- Cap on the size of compile_commands.json read into memory. 10 MB is well
+-- above the typical project size (< 1 MB) and above every real-world example
+-- the author has seen; refusing larger databases up-front is safer than
+-- synchronously parsing a hundred-MB file on the main thread.
+local MAX_COMPILE_COMMANDS_SIZE = 10 * 1024 * 1024
+
+-- Cap on the number of entries in a compile_commands.json after parsing.
+-- Even a 10 MB file (MAX_COMPILE_COMMANDS_SIZE) can hold millions of tiny
+-- entries; this guards the index-building loop separately per the
+-- bounded-loops-on-external-input rule.
+local MAX_COMPILE_COMMANDS_ENTRIES = 100000
 
 ---Map a Neovim filetype to one asmview understands, or nil.
 ---@param ft string
@@ -110,48 +145,103 @@ function M.find_compile_commands(start_dir, max_depth, deps)
   return nil
 end
 
+---Build a `{ source_path -> filtered_flags }` index from a decoded
+---compile_commands.json array. One O(N) pass, then every subsequent
+---lookup for any source file is O(1).
+---@param decoded table
+---@return table<string, string[]>
+local function build_compile_commands_index(decoded)
+  local by_file = {}
+  if #decoded > MAX_COMPILE_COMMANDS_ENTRIES then
+    -- Refuse to index pathologically-large databases rather than loop over
+    -- the whole array; caller gets an empty index and the user hits the
+    -- no-flags fallback (which still produces useful asm).
+    return by_file
+  end
+  for _, entry in ipairs(decoded) do
+    if type(entry.file) == "string" then
+      local argv
+      if type(entry.arguments) == "table" then
+        argv = entry.arguments
+      elseif type(entry.command) == "string" then
+        -- Naive whitespace split: compile_commands entries that use the
+        -- `command` string form (vs the preferred `arguments` array) with
+        -- quoted or escaped-space args (e.g. `-DFOO="bar baz"`) will
+        -- tokenize incorrectly. CMake/Bear emit the `arguments` form, so
+        -- real-world exposure is low; worst case the user sees a compile
+        -- error they can diagnose.
+        argv = vim.split(entry.command, "%s+", { trimempty = true })
+      end
+      if argv then
+        by_file[entry.file] = M._filter_flags(argv, entry.file)
+      end
+    end
+  end
+  return by_file
+end
+
 ---Extract compile flags for `source_path` from a compile_commands.json file.
 ---Returns an empty table if the file cannot be read or the path is absent.
----Only flags are returned (compiler and output are dropped).
+---Only flags are returned (compiler and output are dropped). Parses the
+---database at most once per `db_path` per session — see the cache note at
+---the top of this module for the trade-off. On a malformed database, emits
+---a one-time `vim.notify` warning so the user doesn't silently get wrong
+---assembly from empty flags.
 ---@param db_path string
 ---@param source_path string Absolute path to the source file
 ---@param deps? table
 ---@return string[]
 function M.flags_for_source(db_path, source_path, deps)
   deps = deps or {}
-  local read_file = deps.read_file
-    or function(path)
-      local fh = io.open(path, "r")
-      if not fh then
-        return nil
+  local notify = deps.notify or vim.notify
+  local index = _compile_commands_cache[db_path]
+  if not index then
+    local read_file = deps.read_file
+      or function(path)
+        local fh = io.open(path, "r")
+        if not fh then
+          return nil
+        end
+        local content = fh:read("*a")
+        fh:close()
+        return content
       end
-      local content = fh:read("*a")
-      fh:close()
-      return content
+
+    local content = read_file(db_path)
+    if not content or content == "" then
+      return {}
+    end
+    if #content > MAX_COMPILE_COMMANDS_SIZE then
+      notify(
+        "asmview: " .. db_path .. " exceeds " .. MAX_COMPILE_COMMANDS_SIZE .. " bytes; skipping",
+        vim.log.levels.WARN,
+        { title = "asmview.nvim" }
+      )
+      return {}
     end
 
-  local content = read_file(db_path)
-  if not content or content == "" then
-    return {}
-  end
-
-  local ok, decoded = pcall(vim.json.decode, content)
-  if not ok or type(decoded) ~= "table" then
-    return {}
-  end
-
-  for _, entry in ipairs(decoded) do
-    if entry.file == source_path then
-      if type(entry.arguments) == "table" then
-        return M._filter_flags(entry.arguments, source_path)
-      end
-      if type(entry.command) == "string" then
-        local parts = vim.split(entry.command, "%s+", { trimempty = true })
-        return M._filter_flags(parts, source_path)
-      end
+    local ok, decoded_or_err = pcall(vim.json.decode, content)
+    if not ok or type(decoded_or_err) ~= "table" then
+      notify(
+        "asmview: failed to parse " .. db_path .. ": " .. tostring(decoded_or_err),
+        vim.log.levels.WARN,
+        { title = "asmview.nvim" }
+      )
+      return {}
     end
+
+    index = build_compile_commands_index(decoded_or_err)
+    _compile_commands_cache[db_path] = index
   end
-  return {}
+  return index[source_path] or {}
+end
+
+---Clear the compile_commands index cache. Exposed for tests only; production
+---callers never need to invalidate (the cache lives for the Neovim session
+---and is dropped when the module is unloaded via `package.loaded[...] = nil`).
+---@private
+function M._clear_cache()
+  _compile_commands_cache = {}
 end
 
 ---Drop the compiler argv[0], the `-o <path>` pair, the input file, and any `-O*`
@@ -162,9 +252,17 @@ end
 function M._filter_flags(argv, source_path)
   local out = {}
   local skip_next = false
+  if #argv > MAX_ARGV_LEN then
+    -- Malformed or adversarial compile_commands.json; refuse to process
+    -- rather than iterate an unbounded sequence per the bounded-loops rule.
+    return out
+  end
   for i, arg in ipairs(argv) do
-    if i == 1 then
-    -- argv[0] is the compiler, discard
+    if type(arg) ~= "string" then
+      -- malformed compile_commands.json entry; drop non-string tokens so
+      -- they never reach vim.system's argv (which raises on non-strings)
+    elseif i == 1 then
+      -- argv[0] is the compiler; asmview chooses its own, so skip
     elseif skip_next then
       skip_next = false
     elseif arg == "-o" then

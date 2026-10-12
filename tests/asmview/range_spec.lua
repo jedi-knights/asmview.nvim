@@ -53,6 +53,21 @@ describe("asmview.range", function()
       assert.equals(3, e)
     end)
 
+    it("ignores braces inside C-style line comments when brace-balancing", function()
+      -- Without comment stripping the `// }` would decrement the depth
+      -- counter on line 2 and `find_closing` would exit there instead of at
+      -- the real `}` on line 4.
+      local buf = with_buffer({
+        "void foo() {",
+        "  int x = 1; // }",
+        "  return x;",
+        "}",
+      })
+      local s, e = range.enclosing_function(buf, 2, 100)
+      assert.equals(1, s)
+      assert.equals(4, e)
+    end)
+
     it("returns nil when no function surrounds the cursor", function()
       local buf = with_buffer({ "// just a comment", "// and another" })
       local s = range.enclosing_function(buf, 1, 100)

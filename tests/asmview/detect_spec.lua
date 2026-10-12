@@ -110,6 +110,17 @@ describe("asmview.detect", function()
       local out = detect._filter_flags({ "cc", "-DFOO=1", "-Wno-unused", "/src/a.c" }, "/src/a.c")
       assert.same({ "-DFOO=1", "-Wno-unused" }, out)
     end)
+
+    it("silently drops non-string tokens from a malformed compile_commands entry", function()
+      local out = detect._filter_flags({ "cc", "-std=c++20", 42, false, nil, "-I./inc", "/src/a.c" }, "/src/a.c")
+      -- 42 and false are dropped as non-strings; nil in a sequence truncates
+      -- the array at that point in Lua, so what we actually get is argv up to
+      -- the nil. Still, the invariant is: no non-string element ever appears
+      -- in the returned table.
+      for _, flag in ipairs(out) do
+        assert.equals("string", type(flag))
+      end
+    end)
   end)
 
   describe("flags_for_source()", function()
@@ -141,9 +152,55 @@ describe("asmview.detect", function()
       assert.same({}, out)
     end)
 
-    it("returns empty table on malformed JSON", function()
-      local out = detect.flags_for_source("db.json", "/src/a.cpp", { read_file = fake_read("not json") })
+    it("returns empty table on malformed JSON and notifies the user", function()
+      detect._clear_cache()
+      local notified = {}
+      local out = detect.flags_for_source("db.json", "/src/a.cpp", {
+        read_file = fake_read("not json"),
+        notify = function(msg, lvl, _)
+          table.insert(notified, { msg = msg, lvl = lvl })
+        end,
+      })
       assert.same({}, out)
+      assert.equals(1, #notified)
+      assert.truthy(notified[1].msg:find("failed to parse", 1, true))
+      assert.equals(vim.log.levels.WARN, notified[1].lvl)
+    end)
+
+    it("caches the parsed database per db_path across calls", function()
+      detect._clear_cache()
+      local reads = 0
+      local json = vim.json.encode({
+        { file = "/src/a.cpp", arguments = { "c++", "-std=c++20", "/src/a.cpp" } },
+        { file = "/src/b.cpp", arguments = { "c++", "-I./inc", "/src/b.cpp" } },
+      })
+      local deps = {
+        read_file = function()
+          reads = reads + 1
+          return json
+        end,
+      }
+      local a1 = detect.flags_for_source("db.json", "/src/a.cpp", deps)
+      local a2 = detect.flags_for_source("db.json", "/src/a.cpp", deps)
+      local b1 = detect.flags_for_source("db.json", "/src/b.cpp", deps)
+      assert.equals(1, reads)
+      assert.same({ "-std=c++20" }, a1)
+      assert.same({ "-std=c++20" }, a2)
+      assert.same({ "-I./inc" }, b1)
+    end)
+
+    it("_clear_cache() forces the next call to re-read the database", function()
+      local reads = 0
+      local deps = {
+        read_file = function()
+          reads = reads + 1
+          return vim.json.encode({ { file = "/x.c", arguments = { "cc", "-O2", "/x.c" } } })
+        end,
+      }
+      detect.flags_for_source("db.json", "/x.c", deps)
+      detect._clear_cache()
+      detect.flags_for_source("db.json", "/x.c", deps)
+      assert.equals(2, reads)
     end)
   end)
 

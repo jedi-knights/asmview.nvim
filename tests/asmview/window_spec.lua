@@ -166,6 +166,51 @@ describe("asmview.window", function()
       assert.is_false(vim.api.nvim_win_is_valid(state.win))
     end)
 
+    it("re-fetches the current source content on rerun (R picks up edits)", function()
+      local source = new_source_buffer()
+      local compile_stub = stub_compile({ ok = true, asm = "", exit_code = 0, duration_ms = 0 })
+      local range = { start_line = 1, end_line = 1, source = "int foo(){return 1;}", label = "x" }
+
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub)
+      table.insert(open_states, state)
+      -- The first compile saw the original line.
+      assert.equals("int foo() { return 1; }", compile_stub.calls[1].source)
+
+      -- User edits the source buffer, then presses R.
+      vim.api.nvim_buf_set_lines(source, 0, -1, false, { "int foo() { return 42; }" })
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(state.bufnr, "n")) do
+        if m.lhs == "R" then
+          m.callback()
+        end
+      end
+      assert.equals(2, #compile_stub.calls)
+      assert.equals("int foo() { return 42; }", compile_stub.calls[2].source)
+    end)
+
+    it("replaces the asm buffer with a notice when the source buffer has been wiped before rerun", function()
+      local source = new_source_buffer()
+      local compile_stub = stub_compile({ ok = true, asm = "mov eax, 1\nret", exit_code = 0, duration_ms = 0 })
+      local range = { start_line = 1, end_line = 1, source = "int foo(){return 1;}", label = "x" }
+
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub)
+      table.insert(open_states, state)
+      assert.equals(1, #compile_stub.calls)
+
+      -- Simulate the user :bdelete'ing the source buffer, then pressing R.
+      vim.api.nvim_buf_delete(source, { force = true })
+
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(state.bufnr, "n")) do
+        if m.lhs == "R" then
+          m.callback()
+        end
+      end
+
+      -- recompile() bailed with the invalid-source notice; no new compile fired.
+      assert.equals(1, #compile_stub.calls)
+      local lines = vim.api.nvim_buf_get_lines(state.bufnr, 0, -1, false)
+      assert.truthy(lines[1]:find("source buffer no longer valid", 1, true))
+    end)
+
     it("records state in the module-level table keyed by buffer", function()
       local source = new_source_buffer()
       local compile_stub = stub_compile({ ok = true, asm = "", exit_code = 0, duration_ms = 0 })
