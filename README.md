@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/ci.yml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml/badge.svg" alt="Badge"></a>
+  <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/release.yml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/release.yml/badge.svg" alt="Release"></a>
   <img src="https://img.shields.io/badge/Tests-98%20passing-brightgreen" alt="Tests">
   <a href="https://jedi-knights.github.io/asmview.nvim/"><img src="https://img.shields.io/badge/Coverage-89%2E7%25-green" alt="Coverage"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
@@ -23,8 +24,10 @@
   <a href="#requirements">Requirements</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#usage">Usage</a> ·
+  <a href="#examples">Examples</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#development">Development</a> ·
+  <a href="#architecture">Architecture</a> ·
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -36,6 +39,12 @@ helper? Normally you'd open [Compiler Explorer](https://godbolt.org), paste the
 function, pick the compiler, pick the optimization level, paste in the include
 guards and the project `-D` flags, and hope the result matches what your
 build system actually emits.
+
+The cost of doing that round-trip properly is where the friction actually
+sits: hunting the project's `-D` flags out of a build log, pasting in the
+include guards one at a time, and reconciling the copy-paste divergence
+between the snippet you tested on godbolt and the function your build
+actually ships.
 
 **asmview** does the same thing inside the editor. Put the cursor on a
 function, run `:Asm`, and a floating window shows the assembly — compiled with
@@ -155,6 +164,47 @@ Inside the asm window:
 
 The header line shows the range, the current `-O` level, the syntax
 (intel/att), the exit code, and the elapsed time.
+
+## Examples
+
+### Compare `-O3` against `-O0` on a hot C function
+
+You suspect the compiler isn't vectorizing the inner loop of a hot
+function. Put the cursor anywhere inside the function and run `:Asm`.
+The window opens at the configured default (`-O2`); hit `-` twice to
+step down to `-O0`, note the stack traffic and the lack of SIMD, then
+hit `+` three times to land on `-O3` and watch the same function fold
+into a handful of `vmovaps` / `vfmadd231ps` lines.
+
+```
+:Asm
+---  (then press -- then +++)
+```
+
+### View a Go snippet's gc assembly
+
+Visually select a short function body in a `.go` file and run `:'<,'>Asm`.
+asmview synthesizes a `package main`, compiles with `go build -gcflags=-S`,
+and captures the gc assembly from stderr. The two-state `-O` toggle lets
+you flip between `-S -N -l` (no optimization, no inlining — honest IR)
+and plain `-S` (default optimizer) with `-` and `+`.
+
+```
+V3j:'<,'>Asm
+```
+
+### Honor the project's `compile_commands.json`
+
+In a CMake or Bear-wrapped C/C++ project, generate the compilation
+database once (`cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON …` or `bear --
+make`). Open any source file and run `:Asm` — asmview walks up to find
+`compile_commands.json`, picks the matching entry, and reuses the real
+`-std=`, `-I`, `-D`, and `-W` flags your build uses. What you see in the
+asm window is what the build will actually emit.
+
+```
+:Asm
+```
 
 ## Configuration
 
