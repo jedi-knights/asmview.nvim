@@ -18,6 +18,7 @@
 ---@field c asmview.CompilerSpec
 ---@field cpp asmview.CompilerSpec
 ---@field rust asmview.CompilerSpec
+---@field go asmview.CompilerSpec
 
 ---@class asmview.CompilerSpec
 ---@field cmd string Executable name or absolute path
@@ -36,11 +37,12 @@
 
 ---@class asmview.Request
 ---@field bufnr integer Source buffer whose code we are compiling
----@field filetype "c"|"cpp"|"rust" Detected source language
+---@field filetype "c"|"cpp"|"rust"|"go" Detected source language
 ---@field source string Full source snippet to compile (standalone unit)
 ---@field opt_level string Optimization flag value (member of config.opt_levels)
 ---@field cwd string Working directory for the compiler process
----@field cflags string[] Flags harvested from compile_commands.json (may be empty)
+---@field cflags string[] Flags harvested from compile_commands.json (C/C++ only; empty otherwise)
+---@field go_header? string Package + import block prepended to a Go snippet (Go only)
 
 ---@class asmview.Result
 ---@field ok boolean Whether the compiler exited 0

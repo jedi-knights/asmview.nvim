@@ -1,11 +1,13 @@
 -- lua/asmview/compile.lua
--- Compile a source snippet to assembly text (async via vim.system).
+-- Compile a source snippet to assembly text. Dispatches by language:
+-- C/C++/Rust take a `-S` / `--emit=asm` path that writes an output file;
+-- Go takes a temp-module path and captures stderr from `go build -gcflags=-S`.
 
 local M = {}
 
 local uv = vim.uv or vim.loop
 
----Build the compiler argv for a request.
+---Build the compiler argv for a non-Go request.
 ---@param request asmview.Request
 ---@param cfg asmview.Config
 ---@param src_path string
@@ -49,21 +51,52 @@ function M.build_argv(request, cfg, src_path, out_path)
   return argv
 end
 
+---Build the `go build` argv for a Go request. Only two optimization states
+---are meaningful on Go's gc toolchain: optimized default, and `-N -l`
+---(disable optimization and inlining). Any opt_level that parses as "0"
+---maps to the latter; everything else keeps the default optimizer on.
+---@param request asmview.Request
+---@param cfg asmview.Config
+---@param out_bin string Binary output path (we only care about the asm on stderr)
+---@return string[] argv
+function M.build_go_argv(request, cfg, out_bin)
+  local spec = cfg.compilers.go
+  assert(spec, "no compiler configured for go")
+
+  local gcflags = "-S"
+  if request.opt_level == "0" then
+    gcflags = gcflags .. " -N -l"
+  end
+
+  local argv = { spec.cmd, "build" }
+  for _, flag in ipairs(spec.extra_args) do
+    table.insert(argv, flag)
+  end
+  table.insert(argv, "-gcflags=" .. gcflags)
+  table.insert(argv, "-o")
+  table.insert(argv, out_bin)
+  table.insert(argv, ".")
+  return argv
+end
+
 ---Return a filename extension (without dot) for a filetype.
----@param ft "c"|"cpp"|"rust"
+---@param ft "c"|"cpp"|"rust"|"go"
 ---@return string
 local function src_ext(ft)
   if ft == "c" then
     return "c"
   elseif ft == "cpp" then
     return "cpp"
+  elseif ft == "go" then
+    return "go"
   else
     return "rs"
   end
 end
 
 ---Pick a demangler for the filetype, or nil if not applicable / not installed.
----@param ft "c"|"cpp"|"rust"
+---Go symbols are already readable; no demangler is needed.
+---@param ft "c"|"cpp"|"rust"|"go"
 ---@param deps? table
 ---@return string? cmd
 local function pick_demangler(ft, deps)
@@ -78,7 +111,7 @@ local function pick_demangler(ft, deps)
   return nil
 end
 
----Write source to a temp file. Returns absolute path or raises.
+---Write source to a temp file. Returns absolute path and the containing dir.
 ---@param source string
 ---@param ext string
 ---@return string path, string dir
@@ -97,7 +130,19 @@ local function write_temp_source(source, ext)
   return path, dir
 end
 
----Delete a directory tree. Best-effort; swallows errors because this is cleanup.
+---Write `content` to `path`. Raises on error.
+---@param path string
+---@param content string
+local function write_file(path, content)
+  local fh, err = io.open(path, "w")
+  if not fh then
+    error("asmview: failed to write " .. path .. ": " .. tostring(err))
+  end
+  fh:write(content)
+  fh:close()
+end
+
+---Delete a directory tree. Best-effort; errors are swallowed because this is cleanup.
 ---@param dir string
 local function rmtree(dir)
   if not dir or dir == "" or dir == "/" then
@@ -137,17 +182,14 @@ local function demangle(cmd, text)
   return text
 end
 
----Run a compile request asynchronously. The callback receives an asmview.Result.
+---Compile a C/C++/Rust snippet by writing it to a temp file, invoking the
+---compiler with `-S` / `--emit=asm`, and reading the resulting `.s` output.
 ---@param request asmview.Request
 ---@param cfg asmview.Config
 ---@param callback fun(result: asmview.Result)
 ---@param deps? table
-function M.run(request, cfg, callback, deps)
-  assert(type(request) == "table", "request required")
-  assert(type(cfg) == "table", "cfg required")
-  assert(type(callback) == "function", "callback required")
+local function run_file_based(request, cfg, callback, deps)
   deps = deps or {}
-
   local system = deps.system or vim.system
   local now = deps.now or uv.hrtime
 
@@ -156,7 +198,6 @@ function M.run(request, cfg, callback, deps)
     callback({ ok = false, asm = tostring(src_path), exit_code = -1, duration_ms = 0 })
     return
   end
-  src_dir = src_dir -- unused name clarified via assignment, retained for cleanup
 
   local out_path = src_path:gsub("%.[^.]+$", ".s")
   if out_path == src_path then
@@ -169,8 +210,6 @@ function M.run(request, cfg, callback, deps)
   local handle = system(argv, { cwd = request.cwd, text = true }, function(obj)
     local elapsed_ms = math.floor((now() - started) / 1e6)
     local function finish(result)
-      pcall(uv.fs_unlink, src_path)
-      pcall(uv.fs_unlink, out_path)
       rmtree(src_dir)
       vim.schedule(function()
         callback(result)
@@ -211,7 +250,6 @@ function M.run(request, cfg, callback, deps)
   end)
 
   if not handle then
-    pcall(uv.fs_unlink, src_path)
     rmtree(src_dir)
     callback({
       ok = false,
@@ -220,6 +258,99 @@ function M.run(request, cfg, callback, deps)
       duration_ms = 0,
     })
   end
+end
+
+---Assemble the Go snippet into a buildable file. We force `package main` and
+---add a `func main()` stub when the snippet doesn't declare one, so
+---`go build .` succeeds. The caller is responsible for supplying `go_header`
+---with the buffer's package + import block via `detect.go_header`.
+---@param request asmview.Request
+---@return string content
+function M.build_go_source(request)
+  local header = request.go_header or "package main\n"
+  local parts = { header, "", request.source, "" }
+  if not request.source:find("func%s+main%s*%(") then
+    table.insert(parts, "func main() {}")
+  end
+  return table.concat(parts, "\n")
+end
+
+---Compile a Go snippet. Writes a self-contained module to a temp dir
+---(`go.mod` + `snippet.go`) and runs `go build -gcflags="-S [-N -l]" .`.
+---Assembly is emitted to stderr by the gc compiler; we capture it there.
+---@param request asmview.Request
+---@param cfg asmview.Config
+---@param callback fun(result: asmview.Result)
+---@param deps? table
+local function run_go(request, cfg, callback, deps)
+  deps = deps or {}
+  local system = deps.system or vim.system
+  local now = deps.now or uv.hrtime
+
+  local dir = uv.fs_mkdtemp((uv.os_tmpdir() or "/tmp") .. "/asmview-XXXXXX")
+  if not dir then
+    callback({ ok = false, asm = "asmview: failed to create temp dir", exit_code = -1, duration_ms = 0 })
+    return
+  end
+
+  local ok_write, err = pcall(function()
+    write_file(dir .. "/go.mod", "module asmview_snippet\n\ngo 1.21\n")
+    write_file(dir .. "/snippet.go", M.build_go_source(request))
+  end)
+  if not ok_write then
+    rmtree(dir)
+    callback({ ok = false, asm = tostring(err), exit_code = -1, duration_ms = 0 })
+    return
+  end
+
+  local out_bin = dir .. "/snippet.bin"
+  local argv = M.build_go_argv(request, cfg, out_bin)
+  local started = now()
+
+  local handle = system(argv, { cwd = dir, text = true }, function(obj)
+    local elapsed_ms = math.floor((now() - started) / 1e6)
+    local function finish(result)
+      rmtree(dir)
+      vim.schedule(function()
+        callback(result)
+      end)
+    end
+
+    local asm = (obj.stderr and obj.stderr ~= "") and obj.stderr or (obj.stdout or "")
+    finish({
+      ok = obj.code == 0,
+      asm = asm,
+      exit_code = obj.code,
+      duration_ms = elapsed_ms,
+    })
+  end)
+
+  if not handle then
+    rmtree(dir)
+    callback({
+      ok = false,
+      asm = "asmview: failed to spawn " .. argv[1],
+      exit_code = -1,
+      duration_ms = 0,
+    })
+  end
+end
+
+---Run a compile request asynchronously. The callback receives an asmview.Result
+---on the main thread (vim.schedule-wrapped).
+---@param request asmview.Request
+---@param cfg asmview.Config
+---@param callback fun(result: asmview.Result)
+---@param deps? table
+function M.run(request, cfg, callback, deps)
+  assert(type(request) == "table", "request required")
+  assert(type(cfg) == "table", "cfg required")
+  assert(type(callback) == "function", "callback required")
+
+  if request.filetype == "go" then
+    return run_go(request, cfg, callback, deps)
+  end
+  return run_file_based(request, cfg, callback, deps)
 end
 
 return M

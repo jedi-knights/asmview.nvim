@@ -84,7 +84,12 @@ function M.show(cmd_args, deps)
     end
   end
 
-  window.open(bufnr, resolved, ft, cflags, cfg, compile)
+  local go_header = nil
+  if ft == "go" then
+    go_header = detect.go_header(bufnr, deps)
+  end
+
+  window.open(bufnr, resolved, ft, cflags, go_header, cfg, compile)
   return true
 end
 

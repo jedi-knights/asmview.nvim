@@ -30,9 +30,12 @@ local function find_opening(bufnr, start_line, max_scan)
   for lnum = start_line, stop, -1 do
     local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
     if line then
-      -- A top-level definition line usually ends with `{` or is a `fn ...` signature.
-      -- We accept either `{` at EOL (C/C++) or a leading `fn `/`pub fn ` (Rust).
-      if line:match("^%s*fn%s") or line:match("^%s*pub%s+fn%s") then
+      -- A top-level definition line usually ends with `{` or starts with a
+      -- language-specific function keyword. Accepted shapes:
+      --   C/C++  : trailing `{`
+      --   Rust   : `fn ` / `pub fn `
+      --   Go     : `func ` (freestanding) or `func (recv) ` (method)
+      if line:match("^%s*fn%s") or line:match("^%s*pub%s+fn%s") or line:match("^%s*func%s") then
         return lnum
       end
       if line:match("{%s*$") then
@@ -97,6 +100,8 @@ function M.enclosing_function(bufnr, cursor_line, max_scan)
             or kind == "function_item"
             or kind == "method_definition"
             or kind == "function_declarator"
+            or kind == "function_declaration"
+            or kind == "method_declaration"
           then
             local sr, _, er, _ = node:range()
             return sr + 1, er + 1

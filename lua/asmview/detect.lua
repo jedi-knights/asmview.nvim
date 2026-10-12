@@ -9,11 +9,17 @@ local FT_MAP = {
   cxx = "cpp",
   objcpp = "cpp",
   rust = "rust",
+  go = "go",
 }
+
+-- Scan at most this many lines when harvesting a Go buffer's package + imports.
+-- Imports always sit near the top of the file, so a small cap is safe and keeps
+-- the loop bounded on multi-megabyte generated sources.
+local GO_HEADER_SCAN_LIMIT = 500
 
 ---Map a Neovim filetype to one asmview understands, or nil.
 ---@param ft string
----@return "c"|"cpp"|"rust"|nil
+---@return "c"|"cpp"|"rust"|"go"|nil
 function M.map_filetype(ft)
   return FT_MAP[ft]
 end
@@ -21,12 +27,47 @@ end
 ---Resolve the asmview language for a buffer. Returns nil if unsupported.
 ---@param bufnr integer
 ---@param deps? table
----@return "c"|"cpp"|"rust"|nil
+---@return "c"|"cpp"|"rust"|"go"|nil
 function M.language_for_buffer(bufnr, deps)
   deps = deps or {}
   local get_option = deps.nvim_get_option_value or vim.api.nvim_get_option_value
   local ft = get_option("filetype", { buf = bufnr })
   return M.map_filetype(ft)
+end
+
+---Extract a `package main` declaration + the buffer's `import` block, ready
+---to prepend to a Go snippet so the snippet compiles as a standalone module.
+---The user's original `package foo` is deliberately replaced with `package main`
+---because the asm view compiles the function in isolation — reaching cross-file
+---unexported identifiers from the real package is out of scope.
+---
+---Scans at most GO_HEADER_SCAN_LIMIT lines; imports in Go always sit near the
+---top of the file so the cap is safe. Returns `"package main\n"` when no
+---import block is found.
+---@param bufnr integer
+---@param deps? table
+---@return string
+function M.go_header(bufnr, deps)
+  deps = deps or {}
+  local get_lines = deps.get_lines or vim.api.nvim_buf_get_lines
+  local lines = get_lines(bufnr, 0, GO_HEADER_SCAN_LIMIT, false)
+
+  local out = { "package main" }
+  local in_import_block = false
+  for _, line in ipairs(lines) do
+    if in_import_block then
+      table.insert(out, line)
+      if line:match("^%s*%)") then
+        in_import_block = false
+      end
+    elseif line:match('^%s*import%s+"') or line:match("^%s*import%s+`") then
+      table.insert(out, line)
+    elseif line:match("^%s*import%s*%(") then
+      in_import_block = true
+      table.insert(out, line)
+    end
+  end
+  return table.concat(out, "\n") .. "\n"
 end
 
 ---Return true if `cmd` resolves on PATH.

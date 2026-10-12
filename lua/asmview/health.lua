@@ -31,6 +31,7 @@ function M.check()
   check_exe(cfg.compilers.c.cmd)
   check_exe(cfg.compilers.cpp.cmd)
   check_exe(cfg.compilers.rust.cmd)
+  check_exe(cfg.compilers.go.cmd)
 
   vim.health.start("asmview — demanglers (optional)")
   if cfg.demangle then

@@ -1,7 +1,7 @@
 # asmview.nvim
 
 Compile the function under your cursor to assembly and display it in a floating
-window, without leaving Neovim. Supports **C**, **C++**, and **Rust**.
+window, without leaving Neovim. Supports **C**, **C++**, **Rust**, and **Go**.
 
 Equivalent in spirit to [AssemblyForNeovim][upstream] but rewritten with:
 
@@ -18,7 +18,7 @@ Equivalent in spirit to [AssemblyForNeovim][upstream] but rewritten with:
 ## Requirements
 
 - Neovim ≥ 0.10 (uses `vim.system`, `vim.uv`, `vim.health`)
-- At least one of: `cc` / `c++` / `rustc` on `PATH`
+- At least one of: `cc` / `c++` / `rustc` / `go` on `PATH`
 - Optional: `c++filt`, `rustfilt` (demangling)
 - Optional: a `compile_commands.json` (CMake, Bear, meson) for faithful C/C++ flags
 
@@ -76,9 +76,10 @@ Every field below is optional. Pass only the ones you want to override.
 ```lua
 require("asmview").setup({
   compilers = {
-    c   = { cmd = "cc",    extra_args = {} },
-    cpp = { cmd = "c++",   extra_args = {} },
+    c    = { cmd = "cc",    extra_args = {} },
+    cpp  = { cmd = "c++",   extra_args = {} },
     rust = { cmd = "rustc", extra_args = {} },
+    go   = { cmd = "go",    extra_args = {} },
   },
   opt_levels = { "0", "1", "2", "3", "s", "z" },
   default_opt = "2",
@@ -113,6 +114,23 @@ If found, it harvests the matching entry's flags but strips:
 - the input file (asmview supplies its own)
 
 Everything else — `-std=c++20`, `-I...`, `-D...`, `-Wno-…` — is passed through.
+
+### Go specifics
+
+Go's gc toolchain doesn't expose six optimization dials, so the opt_level
+cycling collapses to a two-state toggle:
+
+| opt_level | `gcflags` sent to `go build` |
+| --------- | ---------------------------- |
+| `"0"`     | `-S -N -l` (no opt, no inline) |
+| anything else | `-S` (default optimizer on) |
+
+For each compile asmview writes a self-contained temp module (`go.mod` +
+`snippet.go`) that forces `package main`, prepends the buffer's `import`
+block, and appends a `func main() {}` stub when the snippet lacks one.
+Assembly is captured from the gc compiler's stderr. Third-party imports
+resolve the same way `go build` does — via `GOPATH`, module proxy, or
+vendor directory.
 
 ## Architecture
 

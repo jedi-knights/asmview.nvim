@@ -9,6 +9,7 @@ local default_config = {
     c = { cmd = "cc", extra_args = {} },
     cpp = { cmd = "c++", extra_args = {} },
     rust = { cmd = "rustc", extra_args = {} },
+    go = { cmd = "go", extra_args = {} },
   },
   opt_levels = { "0", "1", "2", "3", "s", "z" },
   default_opt = "2",
@@ -74,7 +75,7 @@ local function validate(cfg)
     error("compile_commands_search_depth must be >= 0")
   end
 
-  for _, lang in ipairs({ "c", "cpp", "rust" }) do
+  for _, lang in ipairs({ "c", "cpp", "rust", "go" }) do
     local spec = cfg.compilers[lang]
     if type(spec) ~= "table" or type(spec.cmd) ~= "string" or spec.cmd == "" then
       error("compilers." .. lang .. ".cmd must be a non-empty string")

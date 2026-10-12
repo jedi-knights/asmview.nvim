@@ -11,7 +11,8 @@ local M = {}
 ---@field range asmview.Range Range we compiled
 ---@field opt_level string Current optimization level
 ---@field cflags string[] Flags harvested from compile_commands.json (frozen on open)
----@field filetype "c"|"cpp"|"rust"
+---@field go_header? string Go package + import block (Go only, frozen on open)
+---@field filetype "c"|"cpp"|"rust"|"go"
 ---@field busy boolean True while a compile is in flight
 
 local State = {}
@@ -104,6 +105,7 @@ local function recompile(state, cfg, compile)
     opt_level = state.opt_level,
     cwd = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(state.source_bufnr), ":h"),
     cflags = state.cflags,
+    go_header = state.go_header,
   }
   compile.run(request, cfg, function(result)
     state.busy = false
@@ -154,12 +156,13 @@ end
 ---Open a floating window for `request` and kick off the first compile.
 ---@param source_bufnr integer
 ---@param range asmview.Range
----@param filetype "c"|"cpp"|"rust"
----@param cflags string[]
+---@param filetype "c"|"cpp"|"rust"|"go"
+---@param cflags string[] Flags harvested from compile_commands.json (C/C++ only)
+---@param go_header? string Go package + import block (Go only)
 ---@param cfg asmview.Config
 ---@param compile table asmview.compile module
 ---@return asmview.Window
-function M.open(source_bufnr, range, filetype, cflags, cfg, compile)
+function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile)
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("filetype", "asm", { buf = bufnr })
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = bufnr })
@@ -178,6 +181,7 @@ function M.open(source_bufnr, range, filetype, cflags, cfg, compile)
     range = range,
     opt_level = cfg.default_opt,
     cflags = cflags,
+    go_header = go_header,
     filetype = filetype,
     busy = false,
   }
