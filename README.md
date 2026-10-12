@@ -1,37 +1,91 @@
-# asmview.nvim
+<h1 align="center">asmview.nvim</h1>
 
-<p>
+<p align="center">
+  Compile the function at your cursor to assembly, in a floating window, without leaving Neovim.
+</p>
+
+<p align="center">
+  <strong>C</strong> · <strong>C++</strong> · <strong>Rust</strong> · <strong>Go</strong>
+</p>
+
+<p align="center">
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/ci.yml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml/badge.svg" alt="Badge"></a>
   <img src="https://img.shields.io/badge/Tests-98%20passing-brightgreen" alt="Tests">
   <a href="https://jedi-knights.github.io/asmview.nvim/"><img src="https://img.shields.io/badge/Coverage-89%2E7%25-green" alt="Coverage"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
+  <a href="https://github.com/jedi-knights/asmview.nvim/releases/latest"><img src="https://img.shields.io/github/v/release/jedi-knights/asmview.nvim?label=release" alt="Latest release"></a>
 </p>
 
-Compile the function under your cursor to assembly and display it in a floating
-window, without leaving Neovim. Supports **C**, **C++**, **Rust**, and **Go**.
+<p align="center">
+  <a href="#overview">Overview</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#requirements">Requirements</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#development">Development</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
 
-Equivalent in spirit to [AssemblyForNeovim][upstream] but rewritten with:
+## Overview
 
-- No auto-bound keymaps — exposes `:Asm` and `<Plug>(AsmView)` only
-- A validated, LuaCATS-typed configuration
-- Bounded loops (no unbounded walks on hostile filesystems)
-- Dependency-injectable modules so each piece is unit-testable
-- `compile_commands.json` support that strips the input file and the project's
-  `-O` so you can cycle optimization levels without the DB fighting you
-- `:checkhealth asmview`
+You wonder what your inline function actually compiles to — did the compiler
+hoist that bounds check? did it keep the SIMD intrinsic? did it inline that
+helper? Normally you'd open [Compiler Explorer](https://godbolt.org), paste the
+function, pick the compiler, pick the optimization level, paste in the include
+guards and the project `-D` flags, and hope the result matches what your
+build system actually emits.
 
-[upstream]: https://github.com/0xdeadf1sh/AssemblyForNeovim
+**asmview** does the same thing inside the editor. Put the cursor on a
+function, run `:Asm`, and a floating window shows the assembly — compiled with
+the real toolchain on your `$PATH`, the real flags from your
+`compile_commands.json`, and the function selected directly from your current
+buffer. `+` and `-` cycle through optimization levels in place. `R` reruns the
+compiler. No browser, no copy-paste, no divergence between what you see and
+what ships.
+
+Supports **C**, **C++**, **Rust**, and **Go**. For C/C++ the exact flags from
+`compile_commands.json` are harvested (minus the input file and `-O` so you
+can cycle). For Go the gc compiler's `-gcflags=-S` output is captured from
+stderr; snippets are compiled as a synthesized `package main`.
+
+## Features
+
+- **One keystroke, no leaving the editor** — `:Asm` on the function at the
+  cursor; `:'<,'>Asm` on a visual selection.
+- **Live optimization cycling** — `+` / `-` in the asm window re-compiles at
+  the next / previous `-O` level with the same source.
+- **Honors `compile_commands.json`** — picks up the exact project flags
+  (CMake, Bear, meson). Strips `-c`, `-S`, `-O*`, `-o`, and the input file
+  itself so asmview owns those knobs.
+- **Four languages** — C, C++, Rust, Go. Each goes through its own compile
+  path with native toolchain conventions (`-S` for C/C++, `--emit=asm` for
+  rustc, `go build -gcflags=-S` for go).
+- **Symbol demangling** — pipes output through `c++filt` or `rustfilt` when
+  they're on PATH.
+- **Intel or AT&T syntax** — configurable for C/C++.
+- **No auto-bound keymaps** — exposes `:Asm` and `<Plug>(AsmView)` only; you
+  decide the top-level binding.
+- **`:checkhealth asmview`** — confirms compilers, demanglers, and
+  treesitter availability.
 
 ## Requirements
 
-- Neovim ≥ 0.10 (uses `vim.system`, `vim.uv`, `vim.health`)
-- At least one of: `cc` / `c++` / `rustc` / `go` on `PATH`
-- Optional: `c++filt`, `rustfilt` (demangling)
-- Optional: a `compile_commands.json` (CMake, Bear, meson) for faithful C/C++ flags
+- **Neovim ≥ 0.10** — uses `vim.system`, `vim.uv`, `vim.health`
+- **At least one compiler** on `PATH`:
+  - `cc` for C
+  - `c++` for C++
+  - `rustc` for Rust
+  - `go` for Go
+- **Optional**:
+  - `c++filt` / `rustfilt` — symbol demangling
+  - `compile_commands.json` (CMake, Bear, meson) — faithful C/C++ project flags
 
 ## Installation
 
-Lazy.nvim:
+<details open>
+<summary><strong>lazy.nvim</strong></summary>
 
 ```lua
 {
@@ -44,7 +98,31 @@ Lazy.nvim:
 }
 ```
 
-Packer:
+</details>
+
+<details>
+<summary><strong>Native <code>vim.pack</code> (Neovim ≥ 0.12)</strong></summary>
+
+`vim.pack.add` does not run `setup()` or wire keymaps for you — the follow-up
+calls are explicit:
+
+```lua
+vim.pack.add({
+  { src = "https://github.com/jedi-knights/asmview.nvim", version = "v0.2.0" },
+})
+
+require("asmview").setup({})
+vim.keymap.set({ "n", "x" }, "<leader>a", "<Plug>(AsmView)", { desc = "View assembly" })
+```
+
+Omit `version` to track the default branch, or pin to a specific tag or
+branch name. `vim.pack.add` is idempotent — it clones on first run and does
+nothing on subsequent runs. Use `:lua vim.pack.update()` to pull new commits.
+
+</details>
+
+<details>
+<summary><strong>packer.nvim</strong></summary>
 
 ```lua
 use({
@@ -55,14 +133,16 @@ use({
 })
 ```
 
+</details>
+
 ## Usage
 
-| Trigger                | Behavior                                     |
-| ---------------------- | -------------------------------------------- |
-| `:Asm` (normal mode)   | Compile the function enclosing the cursor    |
-| `:'<,'>Asm`            | Compile the visually-selected lines          |
-| `<Plug>(AsmView)` in n | Function around the cursor                   |
-| `<Plug>(AsmView)` in x | Visual selection                             |
+| Trigger                      | Behavior                                     |
+| ---------------------------- | -------------------------------------------- |
+| `:Asm` *(normal mode)*       | Compile the function enclosing the cursor    |
+| `:'<,'>Asm`                  | Compile the visually-selected lines          |
+| `<Plug>(AsmView)` *(n)*      | Function around the cursor                   |
+| `<Plug>(AsmView)` *(x)*      | Visual selection                             |
 
 Inside the asm window:
 
@@ -70,15 +150,16 @@ Inside the asm window:
 | --- | ------------------------------------------ |
 | `+` | Step optimization level up (`O0` → `Oz`)   |
 | `-` | Step optimization level down               |
-| `R` | Rerun the compiler                         |
+| `R` | Rerun the compiler at current settings     |
 | `q` | Close the window                           |
 
-The header line in the window shows the range, the current `-O` level, the
-syntax (intel/att), the exit code, and the elapsed time.
+The header line shows the range, the current `-O` level, the syntax
+(intel/att), the exit code, and the elapsed time.
 
 ## Configuration
 
-Every field below is optional. Pass only the ones you want to override.
+Every field below is optional. Pass only the ones you want to override — the
+defaults are what you'd pick anyway.
 
 ```lua
 require("asmview").setup({
@@ -108,7 +189,7 @@ require("asmview").setup({
 })
 ```
 
-### `compile_commands.json` behavior
+### `compile_commands.json`
 
 For C and C++ sources, asmview walks up from the source file (capped at
 `compile_commands_search_depth` hops) looking for `compile_commands.json`.
@@ -120,41 +201,24 @@ If found, it harvests the matching entry's flags but strips:
 - `-o <path>` (asmview writes to its own temp)
 - the input file (asmview supplies its own)
 
-Everything else — `-std=c++20`, `-I...`, `-D...`, `-Wno-…` — is passed through.
+Everything else — `-std=c++20`, `-I...`, `-D...`, `-Wno-…` — passes through.
 
 ### Go specifics
 
-Go's gc toolchain doesn't expose six optimization dials, so the opt_level
+Go's gc toolchain doesn't expose six optimization dials, so `opt_level`
 cycling collapses to a two-state toggle:
 
-| opt_level | `gcflags` sent to `go build` |
-| --------- | ---------------------------- |
-| `"0"`     | `-S -N -l` (no opt, no inline) |
-| anything else | `-S` (default optimizer on) |
+| `opt_level`   | `gcflags` sent to `go build`     |
+| ------------- | -------------------------------- |
+| `"0"`         | `-S -N -l` (no opt, no inline)   |
+| anything else | `-S` (default optimizer on)      |
 
-For each compile asmview writes a self-contained temp module (`go.mod` +
+For each compile, asmview writes a self-contained temp module (`go.mod` +
 `snippet.go`) that forces `package main`, prepends the buffer's `import`
 block, and appends a `func main() {}` stub when the snippet lacks one.
 Assembly is captured from the gc compiler's stderr. Third-party imports
 resolve the same way `go build` does — via `GOPATH`, module proxy, or
 vendor directory.
-
-## Architecture
-
-```
-asmview.nvim/
-├── plugin/asmview.lua       — guard, :Asm command, <Plug> mapping (no auto-binds)
-├── lua/asmview/
-│   ├── init.lua             — public facade (setup/show)
-│   ├── config.lua           — defaults + validate + setup
-│   ├── types.lua            — LuaCATS classes
-│   ├── detect.lua           — filetype map, PATH probe, compile_commands lookup
-│   ├── range.lua            — treesitter → brace-fallback range resolver
-│   ├── compile.lua          — argv build + vim.system invocation + demangle
-│   ├── window.lua           — floating window + buffer-local keymaps
-│   └── health.lua           — :checkhealth asmview
-└── doc/asmview.txt          — vimdoc
-```
 
 ## Health check
 
@@ -165,12 +229,74 @@ asmview.nvim/
 Verifies the configured compilers are on `PATH`, reports whether the optional
 demanglers are available, and whether treesitter is loaded.
 
+## Architecture
+
+```
+asmview.nvim/
+├── plugin/asmview.lua       — guard, :Asm command, <Plug> mappings
+├── lua/asmview/
+│   ├── init.lua             — public facade (setup / show)
+│   ├── config.lua           — defaults + validate + setup
+│   ├── types.lua            — LuaCATS classes
+│   ├── detect.lua           — filetype map, PATH probe, compile_commands lookup
+│   ├── range.lua            — treesitter → brace-fallback range resolver
+│   ├── compile.lua          — argv build + vim.system invocation + demangle
+│   ├── window.lua           — floating window + buffer-local keymaps
+│   └── health.lua           — :checkhealth asmview
+├── doc/asmview.txt          — vimdoc
+└── tests/asmview/*_spec.lua — neospec specs, one file per module
+```
+
+## Development
+
+```bash
+make lint              # stylua --check against lua/ and plugin/
+make format            # rewrite with stylua
+make test              # neospec run against tests/asmview/*_spec.lua
+make test-file FILE=tests/asmview/config_spec.lua
+make test-coverage     # emits coverage/lcov.info + console percentage
+```
+
+`make test` requires [`neospec`](https://github.com/jedi-knights/neospec) on
+`PATH`. Install the latest release binary from
+[its Releases page](https://github.com/jedi-knights/neospec/releases).
+
+Every public function takes an optional `deps` table so specs can inject
+stubs instead of monkey-patching `vim.*`. New public API must follow the
+same pattern — see `CLAUDE.md` for the conventions in effect.
+
 ## Changelog
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the per-release summary; the
+See [`CHANGELOG.md`](CHANGELOG.md) for the per-release summary. The
 authoritative per-release notes live on the
 [GitHub Releases page](https://github.com/jedi-knights/asmview.nvim/releases).
 
+## Contributing
+
+Pull requests are welcome. The flow this repo uses:
+
+1. Fork and branch from `main` — never commit directly to `main` (the branch
+   is ruleset-protected).
+2. Use [Angular Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0-angular/)
+   (`feat:`, `fix:`, `docs:`, `test:`, `chore:`, `ci:`, …). The release
+   workflow uses these to pick the next version.
+3. Keep `make lint` and `make test` green. New behavior ships with a failing
+   test first (see `rules/tdd.md` in `CLAUDE.md`).
+4. Open the PR against `main`; CI runs Lint + Test + Validate.
+
+More extensive contributor guidance lives in [`CLAUDE.md`](CLAUDE.md).
+
+## Credits
+
+- **[AssemblyForNeovim](https://github.com/0xdeadf1sh/AssemblyForNeovim)**
+  by [0xdeadf1sh](https://github.com/0xdeadf1sh) — the original idea and
+  the `+` / `-` / `R` / `q` window-key convention.
+- **[yoda.nvim](https://github.com/jedi-knights/yoda.nvim)** — the CI,
+  release, and badge-publishing patterns are mirrored directly from yoda,
+  including the `install-neospec` composite action.
+- **[neospec](https://github.com/jedi-knights/neospec)** — the test runner
+  that boots a pinned Neovim and runs the spec files.
+
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [`LICENSE`](LICENSE).
