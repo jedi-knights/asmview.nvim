@@ -79,16 +79,15 @@ function M.build_go_argv(request, cfg, out_bin)
   return argv
 end
 
----Return a filename extension (without dot) for a filetype.
----@param ft "c"|"cpp"|"rust"|"go"
+---Return a filename extension (without dot) for a file-based (non-Go) filetype.
+---Go takes its own path via run_go — it never reaches write_temp_source.
+---@param ft "c"|"cpp"|"rust"
 ---@return string
 local function src_ext(ft)
   if ft == "c" then
     return "c"
   elseif ft == "cpp" then
     return "cpp"
-  elseif ft == "go" then
-    return "go"
   else
     return "rs"
   end
@@ -167,11 +166,16 @@ local function rmtree(dir)
 end
 
 ---Pipe `text` through `cmd` and return its stdout, or `text` on any failure.
+---Accepts `deps.system` so tests can inject a fake demangler without
+---spawning the real binary.
 ---@param cmd string
 ---@param text string
+---@param deps? table
 ---@return string
-local function demangle(cmd, text)
-  local ok, result = pcall(vim.system, { cmd }, { stdin = text, text = true }, nil)
+local function demangle(cmd, text, deps)
+  deps = deps or {}
+  local system = deps.system or vim.system
+  local ok, result = pcall(system, { cmd }, { stdin = text, text = true }, nil)
   if not ok then
     return text
   end
@@ -242,7 +246,7 @@ local function run_file_based(request, cfg, callback, deps)
     if cfg.demangle then
       local tool = pick_demangler(request.filetype, deps)
       if tool then
-        asm = demangle(tool, asm)
+        asm = demangle(tool, asm, deps)
       end
     end
 

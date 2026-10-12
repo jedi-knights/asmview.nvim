@@ -52,6 +52,21 @@ describe("asmview.compile", function()
       assert.is_false(vim.tbl_contains(argv, "-masm=intel"))
     end)
 
+    it("appends every compiler.<ft>.extra_args from config", function()
+      config.setup({ compilers = { c = { cmd = "cc", extra_args = { "-g", "-DFOO=1" } } } })
+      local argv =
+        compile.build_argv({ filetype = "c", opt_level = "2", cflags = {} }, config.get(), "/tmp/x.c", "/tmp/x.s")
+      assert.is_true(vim.tbl_contains(argv, "-g"))
+      assert.is_true(vim.tbl_contains(argv, "-DFOO=1"))
+    end)
+
+    it("appends compiler.rust.extra_args", function()
+      config.setup({ compilers = { rust = { cmd = "rustc", extra_args = { "--edition=2021" } } } })
+      local argv =
+        compile.build_argv({ filetype = "rust", opt_level = "2", cflags = {} }, config.get(), "/tmp/x.rs", "/tmp/x.s")
+      assert.is_true(vim.tbl_contains(argv, "--edition=2021"))
+    end)
+
     it("prepends harvested cflags before the plugin's own flags", function()
       local argv = compile.build_argv(
         { filetype = "cpp", opt_level = "0", cflags = { "-std=c++20", "-I./inc" } },
@@ -165,6 +180,131 @@ describe("asmview.compile", function()
       end)
       assert.is_false(flag.result.ok)
       assert.truthy(flag.result.asm:find("compiler exited 0 but no output"))
+    end)
+
+    it("reads the asm output file and reports success when the compiler exits 0", function()
+      config.setup({ demangle = false })
+      local flag = {}
+      compile.run(
+        { filetype = "c", source = "int foo(){return 1;}", opt_level = "2", cwd = "/tmp", cflags = {} },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          -- Simulate a successful compiler run by writing the expected `.s`
+          -- output at the path asmview specified via `-o`. This triggers the
+          -- read + finish + rmtree cleanup path.
+          system = function(argv, _, callback)
+            for i, v in ipairs(argv) do
+              if v == "-o" then
+                local fh = assert(io.open(argv[i + 1], "w"))
+                fh:write(".text\n.globl foo\nfoo:\n  mov $1, %eax\n  ret\n")
+                fh:close()
+                break
+              end
+            end
+            callback({ code = 0, stdout = "", stderr = "" })
+            return {}
+          end,
+        }
+      )
+      vim.wait(500, function()
+        return flag.done
+      end)
+      assert.is_true(flag.result.ok)
+      assert.equals(0, flag.result.exit_code)
+      assert.truthy(flag.result.asm:find("foo:", 1, true))
+    end)
+
+    it("pipes the asm through the demangler when demangle=true and the tool is available", function()
+      config.setup({ demangle = true })
+      local flag = {}
+      local saw_cxxfilt = false
+      compile.run(
+        { filetype = "cpp", source = "void x(){}", opt_level = "2", cwd = "/tmp", cflags = {} },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          executable = function(name)
+            return name == "c++filt" and 1 or 0
+          end,
+          system = function(argv, _, callback)
+            if argv[1] == "c++filt" then
+              -- Synchronous :wait()-style handle used by the demangle helper.
+              saw_cxxfilt = true
+              return {
+                wait = function()
+                  return { code = 0, stdout = "demangled!\n", stderr = "" }
+                end,
+              }
+            end
+            -- Compiler path: write the expected asm file.
+            for i, v in ipairs(argv) do
+              if v == "-o" then
+                local fh = assert(io.open(argv[i + 1], "w"))
+                fh:write("mangled asm\n")
+                fh:close()
+                break
+              end
+            end
+            callback({ code = 0, stdout = "", stderr = "" })
+            return {}
+          end,
+        }
+      )
+      vim.wait(500, function()
+        return flag.done
+      end)
+      assert.is_true(flag.result.ok)
+      assert.is_true(saw_cxxfilt)
+      assert.truthy(flag.result.asm:find("demangled!"))
+    end)
+
+    it("falls back to the original asm when the demangler fails (code != 0)", function()
+      config.setup({ demangle = true })
+      local flag = {}
+      compile.run(
+        { filetype = "cpp", source = "void x(){}", opt_level = "2", cwd = "/tmp", cflags = {} },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          executable = function(name)
+            return name == "c++filt" and 1 or 0
+          end,
+          system = function(argv, _, callback)
+            if argv[1] == "c++filt" then
+              return {
+                wait = function()
+                  return { code = 1, stdout = "", stderr = "oops" }
+                end,
+              }
+            end
+            for i, v in ipairs(argv) do
+              if v == "-o" then
+                local fh = assert(io.open(argv[i + 1], "w"))
+                fh:write("mangled asm\n")
+                fh:close()
+                break
+              end
+            end
+            callback({ code = 0, stdout = "", stderr = "" })
+            return {}
+          end,
+        }
+      )
+      vim.wait(500, function()
+        return flag.done
+      end)
+      assert.is_true(flag.result.ok)
+      assert.truthy(flag.result.asm:find("mangled asm"))
     end)
 
     it("reports a spawn failure when vim.system returns no handle", function()
