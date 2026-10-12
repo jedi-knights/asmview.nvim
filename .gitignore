@@ -1,0 +1,6 @@
+*.swp
+.luarc.json
+.luarc.jsonc
+.DS_Store
+tags
+TODO.md
