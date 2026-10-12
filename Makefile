@@ -7,7 +7,7 @@ SPEC_DIR     ?= tests/asmview
 SPEC_INIT    ?= tests/minimal_init.lua
 SPEC_GLOB    ?= $(SPEC_DIR)/**/*_spec.lua
 
-.PHONY: help lint format test test-file require-neospec
+.PHONY: help lint format test test-file test-coverage require-neospec
 
 help:
 	@echo "asmview.nvim — development commands"
@@ -16,6 +16,7 @@ help:
 	@echo "  make format            — rewrite $(STYLUA_PATHS) through stylua"
 	@echo "  make test              — run every spec under $(SPEC_DIR)"
 	@echo "  make test-file FILE=x  — run a single spec file"
+	@echo "  make test-coverage     — run specs and emit lcov + console coverage"
 
 lint:
 	stylua --check $(STYLUA_PATHS)
@@ -38,3 +39,11 @@ test-file: require-neospec
 	@test -n "$(FILE)" || { echo "usage: make test-file FILE=tests/asmview/<name>_spec.lua"; exit 1; }
 	@$(NEOSPEC) run --init-file=$(SPEC_INIT) --pattern='$(FILE)' \
 		--neovim-version=$(NVIM_VERSION) --format=console
+
+test-coverage: require-neospec
+	@$(NEOSPEC) run --init-file=$(SPEC_INIT) --pattern='$(SPEC_GLOB)' \
+		--neovim-version=$(NVIM_VERSION) \
+		--coverage-include=lua/asmview \
+		--coverage-source='lua/asmview/*.lua' \
+		--branch-instrumentation \
+		--format=console --format=lcov --coverage-dir=coverage

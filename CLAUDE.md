@@ -39,6 +39,7 @@ make lint              # stylua --check lua plugin
 make format            # stylua lua plugin
 make test              # neospec run against tests/asmview/*_spec.lua
 make test-file FILE=tests/asmview/config_spec.lua
+make test-coverage     # emits coverage/lcov.info + a console pct line
 ```
 
 `make test` requires `neospec` on PATH. Install from https://github.com/jedi-knights/neospec/releases.
@@ -67,7 +68,8 @@ Release workflow fires on main pushes via `workflow_run` after CI succeeds; `jed
 
 - Function-range detection via brace balancing is heuristic; Go method receivers and C++ templates can confuse it. Treesitter is the first strategy and the one to invest in if someone files a parsing issue.
 - Go snippets always compile under `package main`, so a function that references unexported identifiers from its original package won't build. Design trade — the alternative is checking out the whole module.
-- The first `v0.1.0` release landed via a manually-created GitHub Release because `go-semantic-release` 404'd on the empty-releases edge case. Subsequent releases should run end-to-end automatically.
+- `jedi-knights/go-semantic-release@v0.11.0` consistently 404s on the publish step for this repo while the identical workflow works on yoda.nvim. Tag gets pushed; Release page has to be created manually (`gh release create <tag> --generate-notes --title <tag>`). Open upstream issue: https://github.com/jedi-knights/go-semantic-release/issues/35.
+- Badge workflow (`.github/workflows/badge.yaml`) publishes the HTML coverage report to GitHub Pages after each successful CI run on main. It does **not** auto-commit the Coverage percentage back into README — doing so requires a `GH_TOKEN` repo secret with admin role that can bypass the branch ruleset (as yoda.nvim has). When coverage changes materially, update the shields.io URL in README manually.
 
 ## Pointers
 
