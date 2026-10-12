@@ -1,4 +1,4 @@
-*asmview.txt*  Show C/C++/Rust assembly in a floating window
+*asmview.txt*  Show C/C++/Rust/Go assembly in a floating window
 
 ==============================================================================
 CONTENTS                                                     *asmview-contents*
