@@ -29,7 +29,10 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # GH_TOKEN carries ruleset-bypass authority so the semantic-release
+          # prepare step can commit CHANGELOG.md and push it back to main.
+          # The default GITHUB_TOKEN is blocked by the pull_request ruleset.
+          token: ${{ secrets.GH_TOKEN }}
 
       - name: Configure git identity
         run: |
