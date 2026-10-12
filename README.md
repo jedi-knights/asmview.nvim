@@ -165,6 +165,12 @@ asmview.nvim/
 Verifies the configured compilers are on `PATH`, reports whether the optional
 demanglers are available, and whether treesitter is loaded.
 
+## Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the per-release summary; the
+authoritative per-release notes live on the
+[GitHub Releases page](https://github.com/jedi-knights/asmview.nvim/releases).
+
 ## License
 
 MIT. See `LICENSE`.

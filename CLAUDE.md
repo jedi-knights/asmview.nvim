@@ -56,6 +56,8 @@ Main is protected (`pull_request`, `non_fast_forward`, `deletion` rules). **Neve
 
 Release workflow fires on main pushes via `workflow_run` after CI succeeds; `jedi-knights/go-semantic-release@v0.11.0` picks the next tag from commit types. **Owner and repo are configured in `.semantic-release.yaml` at the repo root** — without that file the action silently POSTs to `/repos///releases` and 404s (upstream `jedi-knights/go-semantic-release#35`).
 
+**CHANGELOG.md is auto-maintained** by the release workflow via `prepare.changelog_file` in `.semantic-release.yaml`. On each release, go-semantic-release prepends the generated notes under the `# Changelog` title and then stages/commits/pushes the file as part of `git.assets`. The checkout step uses `secrets.GH_TOKEN` because the push would be blocked by the branch ruleset if it used the default `GITHUB_TOKEN`. The commit message includes `[skip ci]` so the push doesn't retrigger CI → Release in a loop. If `GH_TOKEN` is ever removed or revoked, the release workflow will fail on the push step — switch `.semantic-release.yaml` back to minimal (no `prepare` or `git` keys) and the automation disables cleanly.
+
 ## Testing
 
 - Runner: `neospec` (same as yoda.nvim; shares the composite install action).
@@ -68,7 +70,7 @@ Release workflow fires on main pushes via `workflow_run` after CI succeeds; `jed
 
 - Function-range detection via brace balancing is heuristic; Go method receivers and C++ templates can confuse it. Treesitter is the first strategy and the one to invest in if someone files a parsing issue.
 - Go snippets always compile under `package main`, so a function that references unexported identifiers from its original package won't build. Design trade — the alternative is checking out the whole module.
-- Badge workflow (`.github/workflows/badge.yaml`) publishes the HTML coverage report to GitHub Pages after each successful CI run on main. It does **not** auto-commit the Coverage percentage back into README — doing so requires a `GH_TOKEN` repo secret with admin role that can bypass the branch ruleset (as yoda.nvim has). When coverage changes materially, update the shields.io URL in README manually.
+- Badge workflow (`.github/workflows/badge.yaml`) publishes the HTML coverage report to GitHub Pages after each successful CI run on main AND auto-commits the Coverage percentage in the README badge URL. Auto-commit uses `secrets.GH_TOKEN` for ruleset bypass, same as the release workflow; the commit message includes `[skip ci]`.
 
 ## Pointers
 

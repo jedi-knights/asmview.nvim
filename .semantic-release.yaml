@@ -1,3 +1,20 @@
 github:
   owner: jedi-knights
   repo: asmview.nvim
+
+prepare:
+  # Prepend each release's notes under the `# Changelog` title in CHANGELOG.md.
+  # Existing content is preserved (see internal/adapters/plugins/prepare.go's
+  # prependChangelog in jedi-knights/go-semantic-release).
+  changelog_file: CHANGELOG.md
+
+git:
+  # Stage, commit, and push CHANGELOG.md as part of each release.
+  # Requires the release workflow's checkout step to authenticate with a token
+  # that can bypass this repo's branch ruleset — we use `secrets.GH_TOKEN`.
+  assets:
+    - CHANGELOG.md
+  # `[skip ci]` prevents the auto-commit from retriggering CI → release in a
+  # loop. The chore(release) prefix matches angular convention; semantic-release
+  # itself won't bump the version from a chore commit.
+  message: "chore(release): {{.Version}} [skip ci]"
