@@ -44,6 +44,23 @@ Lazy.nvim:
 }
 ```
 
+Native `vim.pack` (Neovim ≥ 0.12). `vim.pack.add` does not run a plugin's
+`setup()` or wire keymaps for you — call them yourself after the add:
+
+```lua
+vim.pack.add({
+  { src = "https://github.com/jedi-knights/asmview.nvim", version = "v0.2.0" },
+})
+
+require("asmview").setup({})
+vim.keymap.set({ "n", "x" }, "<leader>a", "<Plug>(AsmView)", { desc = "View assembly" })
+```
+
+Omit `version` to track the default branch, or pin to a specific tag
+(`"v0.2.0"`) or branch name. `vim.pack.add` is idempotent — it clones on
+first run and does nothing on subsequent runs; use `:lua
+vim.pack.update()` to pull new upstream commits.
+
 Packer:
 
 ```lua
