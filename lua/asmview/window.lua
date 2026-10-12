@@ -25,11 +25,18 @@ local function get_state(bufnr)
 end
 
 ---Compute floating-window geometry from config ratios.
+---Prefers the ratio-derived size (clamped at a readable minimum), but
+---never exceeds the terminal's available cells minus a small margin —
+---nvim_open_win errors if width/height exceed `vim.o.columns`/`lines`.
 ---@param cfg asmview.Config
 ---@return table opts for nvim_open_win
 local function float_opts(cfg)
-  local width = math.max(40, math.floor(vim.o.columns * cfg.float.width_ratio))
-  local height = math.max(10, math.floor(vim.o.lines * cfg.float.height_ratio))
+  local max_width = math.max(1, vim.o.columns - 2)
+  local max_height = math.max(1, vim.o.lines - 2)
+  local pref_width = math.max(40, math.floor(vim.o.columns * cfg.float.width_ratio))
+  local pref_height = math.max(10, math.floor(vim.o.lines * cfg.float.height_ratio))
+  local width = math.min(pref_width, max_width)
+  local height = math.min(pref_height, max_height)
   local row = math.floor((vim.o.lines - height) / 2)
   local col = math.floor((vim.o.columns - width) / 2)
   return {

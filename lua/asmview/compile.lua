@@ -14,6 +14,13 @@ local uv = vim.uv or vim.loop
 ---@param out_path string
 ---@return string[] argv
 function M.build_argv(request, cfg, src_path, out_path)
+  vim.validate({
+    filetype = { request.filetype, "string" },
+    opt_level = { request.opt_level, "string" },
+    cflags = { request.cflags, "table" },
+    src_path = { src_path, "string" },
+    out_path = { out_path, "string" },
+  })
   local spec = cfg.compilers[request.filetype]
   assert(spec, "no compiler configured for " .. request.filetype)
 
@@ -60,6 +67,10 @@ end
 ---@param out_bin string Binary output path (we only care about the asm on stderr)
 ---@return string[] argv
 function M.build_go_argv(request, cfg, out_bin)
+  vim.validate({
+    opt_level = { request.opt_level, "string" },
+    out_bin = { out_bin, "string" },
+  })
   local spec = cfg.compilers.go
   assert(spec, "no compiler configured for go")
 
@@ -203,10 +214,9 @@ local function run_file_based(request, cfg, callback, deps)
     return
   end
 
+  -- write_temp_source always writes `snippet.<ext>` so the gsub always
+  -- matches; the previous `== src_path` fallback was unreachable.
   local out_path = src_path:gsub("%.[^.]+$", ".s")
-  if out_path == src_path then
-    out_path = src_path .. ".s"
-  end
 
   local argv = M.build_argv(request, cfg, src_path, out_path)
   local started = now()

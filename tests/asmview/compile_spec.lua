@@ -52,6 +52,18 @@ describe("asmview.compile", function()
       assert.is_false(vim.tbl_contains(argv, "-masm=intel"))
     end)
 
+    it("rejects a request missing filetype at the validate gate", function()
+      assert.has_error(function()
+        compile.build_argv({ opt_level = "2", cflags = {} }, config.get(), "/tmp/x.c", "/tmp/x.s")
+      end)
+    end)
+
+    it("rejects a request with a non-table cflags at the validate gate", function()
+      assert.has_error(function()
+        compile.build_argv({ filetype = "c", opt_level = "2", cflags = "oops" }, config.get(), "/tmp/x.c", "/tmp/x.s")
+      end)
+    end)
+
     it("appends every compiler.<ft>.extra_args from config", function()
       config.setup({ compilers = { c = { cmd = "cc", extra_args = { "-g", "-DFOO=1" } } } })
       local argv =
@@ -89,6 +101,12 @@ describe("asmview.compile", function()
   end)
 
   describe("build_go_argv()", function()
+    it("rejects a request missing opt_level at the validate gate", function()
+      assert.has_error(function()
+        compile.build_go_argv({}, config.get(), "/tmp/x.bin")
+      end)
+    end)
+
     it("defaults to -gcflags=-S for any non-zero opt_level", function()
       local argv = compile.build_go_argv({ opt_level = "2" }, config.get(), "/tmp/x.bin")
       assert.equals("go", argv[1])
