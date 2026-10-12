@@ -56,7 +56,11 @@ Main is protected (`pull_request`, `non_fast_forward`, `deletion` rules). **Neve
 
 Release workflow fires on main pushes via `workflow_run` after CI succeeds; `jedi-knights/go-semantic-release@v0.11.0` picks the next tag from commit types. **Owner and repo are configured in `.semantic-release.yaml` at the repo root** — without that file the action silently POSTs to `/repos///releases` and 404s (upstream `jedi-knights/go-semantic-release#35`).
 
-**CHANGELOG.md is auto-maintained** by the release workflow via `prepare.changelog_file` in `.semantic-release.yaml`. On each release, go-semantic-release prepends the generated notes under the `# Changelog` title and then stages/commits/pushes the file as part of `git.assets`. The checkout step uses `secrets.GH_TOKEN` because the push would be blocked by the branch ruleset if it used the default `GITHUB_TOKEN`. The commit message includes `[skip ci]` so the push doesn't retrigger CI → Release in a loop. If `GH_TOKEN` is ever removed or revoked, the release workflow will fail on the push step — switch `.semantic-release.yaml` back to minimal (no `prepare` or `git` keys) and the automation disables cleanly.
+**CHANGELOG.md is auto-maintained** by the release workflow via `prepare.changelog_file` in `.semantic-release.yaml`. On each release, go-semantic-release prepends the generated notes **immediately under the `# Changelog` title line** (see upstream `internal/adapters/plugins/prepare.go`'s `prependChangelog`: it splits on the first `\n`, keeps the title, inserts the new entry, and reattaches the rest). Then it stages/commits/pushes the file as part of `git.assets`. The checkout step uses `secrets.GH_TOKEN` because the push would be blocked by the branch ruleset if it used the default `GITHUB_TOKEN`. The commit message includes `[skip ci]` so the push doesn't retrigger CI → Release in a loop.
+
+**Don't put a preamble between `# Changelog` and the first version section.** It'll get pushed down below the newest release on every auto-insert — awkward and worsens monotonically. Keep the title line immediately followed by version sections. Format split is expected: hand-seeded `[0.1.0]` – `[0.1.4]` entries follow Keep a Changelog with square brackets; auto-inserted `0.2.0` onwards follow go-semantic-release's `## X.Y.Z (date)` convention. Both are valid markdown.
+
+If `GH_TOKEN` is ever removed or revoked, the release workflow will fail on the push step — switch `.semantic-release.yaml` back to minimal (no `prepare` or `git` keys) and the automation disables cleanly.
 
 ## Testing
 
