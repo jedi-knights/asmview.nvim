@@ -6,17 +6,6 @@
 
 - auto-maintain CHANGELOG.md + auto-update coverage badge (#13) (5caae79)
 
-All notable changes to asmview.nvim are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
-adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-The authoritative per-release notes live on the
-[GitHub Releases page](https://github.com/jedi-knights/asmview.nvim/releases).
-
-Entries from v0.1.5 onward are **prepended automatically** by the release
-workflow via `go-semantic-release`'s `prepare.changelog_file`. The v0.1.0 — v0.1.4
-sections below were seeded by hand from the pre-automation Release pages.
-
 ## [0.1.4] - 2026-10-12
 
 ### Fixed
