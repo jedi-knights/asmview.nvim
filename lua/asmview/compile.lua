@@ -74,6 +74,10 @@ function M.build_go_argv(request, cfg, out_bin)
   local spec = cfg.compilers.go
   assert(spec, "no compiler configured for go")
 
+  -- `go build` accepts multiple gc flags only as a single space-separated
+  -- `-gcflags=<value>` argument — splitting into repeated `-gcflags` entries
+  -- would make Go treat each as a separate pattern-less override and only
+  -- the last wins. Keep the space-joined string as one argv token.
   local gcflags = "-S"
   if request.opt_level == "0" then
     gcflags = gcflags .. " -N -l"
@@ -122,6 +126,15 @@ local function pick_demangler(ft, deps)
 end
 
 ---Write source to a temp file. Returns absolute path and the containing dir.
+---
+---`uv.fs_mkdtemp` and the follow-up `io.open` + `fh:write` run synchronously
+---on the main thread. This is a deliberate pragmatic trade-off: `/tmp` on
+---local disk completes in microseconds, the snippet files are typically a
+---few hundred bytes, and routing the whole run_file_based path through an
+---async-callback chain just to defer two microsecond operations is net
+---complexity loss. Users on exotic FS mounts (NFS /tmp) accept a sub-ms
+---stall per compile. Compare: `detect.lua`'s compile_commands read documents
+---the same trade-off with the same reasoning.
 ---@param source string
 ---@param ext string
 ---@return string path, string dir
@@ -152,10 +165,14 @@ local function write_file(path, content)
   fh:close()
 end
 
----Delete a directory tree. Best-effort; errors are swallowed because this is cleanup.
+---Delete a directory tree. Best-effort; errors are swallowed because this is
+---cleanup. Capped at `max_depth` recursive descents to defend against
+---symlink loops inside the temp dir.
 ---@param dir string
-local function rmtree(dir)
-  if not dir or dir == "" or dir == "/" then
+---@param max_depth? integer Default 20 — real cleanup trees are 1 or 2 levels.
+local function rmtree(dir, max_depth)
+  max_depth = max_depth or 20
+  if not dir or dir == "" or dir == "/" or max_depth <= 0 then
     return
   end
   local handle = uv.fs_scandir(dir)
@@ -167,7 +184,7 @@ local function rmtree(dir)
       end
       local sub = dir .. "/" .. name
       if kind == "directory" then
-        rmtree(sub)
+        rmtree(sub, max_depth - 1)
       else
         uv.fs_unlink(sub)
       end
@@ -176,25 +193,32 @@ local function rmtree(dir)
   uv.fs_rmdir(dir)
 end
 
----Pipe `text` through `cmd` and return its stdout, or `text` on any failure.
----Accepts `deps.system` so tests can inject a fake demangler without
----spawning the real binary.
+---Pipe `text` through `cmd` asynchronously and deliver the demangled result
+---(or the original `text` on any failure) via `callback`. Accepts
+---`deps.system` so tests can inject a fake demangler. Async by design so the
+---main thread never blocks on a demangler process — a prior synchronous
+---`:wait()` form could stall the UI for the duration of the demangle on
+---large asm outputs.
 ---@param cmd string
 ---@param text string
 ---@param deps? table
----@return string
-local function demangle(cmd, text, deps)
+---@param callback fun(result: string)
+local function demangle(cmd, text, deps, callback)
   deps = deps or {}
   local system = deps.system or vim.system
-  local ok, result = pcall(system, { cmd }, { stdin = text, text = true }, nil)
+  local ok, _handle = pcall(system, { cmd }, { stdin = text, text = true }, function(obj)
+    if obj.code == 0 and obj.stdout and obj.stdout ~= "" then
+      callback(obj.stdout)
+    else
+      callback(text)
+    end
+  end)
+  -- _handle is intentionally discarded: the demangle call is fire-and-forget
+  -- and the user has no cancel UI; retaining the SystemObj would just hold a
+  -- reference across the schedule hop for no gain.
   if not ok then
-    return text
+    callback(text)
   end
-  local completed = result:wait()
-  if completed.code == 0 and completed.stdout and completed.stdout ~= "" then
-    return completed.stdout
-  end
-  return text
 end
 
 ---Compile a C/C++/Rust snippet by writing it to a temp file, invoking the
@@ -208,11 +232,15 @@ local function run_file_based(request, cfg, callback, deps)
   local system = deps.system or vim.system
   local now = deps.now or uv.hrtime
 
-  local ok_src, src_path, src_dir = pcall(write_temp_source, request.source, src_ext(request.filetype))
+  -- On failure, `src_path_or_err` holds the error string from `write_temp_source`
+  -- and `src_dir` is nil; on success they are the real path and dir. Named this
+  -- way so the error branch below doesn't look like it dereferences a path.
+  local ok_src, src_path_or_err, src_dir = pcall(write_temp_source, request.source, src_ext(request.filetype))
   if not ok_src then
-    callback({ ok = false, asm = tostring(src_path), exit_code = -1, duration_ms = 0 })
+    callback({ ok = false, asm = tostring(src_path_or_err), exit_code = -1, duration_ms = 0 })
     return
   end
+  local src_path = src_path_or_err
 
   -- write_temp_source always writes `snippet.<ext>` so the gsub always
   -- matches; the previous `== src_path` fallback was unreachable.
@@ -221,53 +249,69 @@ local function run_file_based(request, cfg, callback, deps)
   local argv = M.build_argv(request, cfg, src_path, out_path)
   local started = now()
 
-  local handle = system(argv, { cwd = request.cwd, text = true }, function(obj)
+  -- vim.system raises on invalid argv in production (contract: it never
+  -- returns nil). Wrap in pcall so a production spawn failure routes to the
+  -- same error path as a test stub returning nil, instead of propagating an
+  -- uncaught error up through recompile().
+  local ok_spawn, handle = pcall(system, argv, { cwd = request.cwd, text = true }, function(obj)
     local elapsed_ms = math.floor((now() - started) / 1e6)
-    local function finish(result)
-      rmtree(src_dir)
-      vim.schedule(function()
+    -- The vim.system callback runs in a libuv context where sync I/O and
+    -- nested vim.system `:wait()` are unsafe (fast-event rules, E5560).
+    -- Hop to the main thread before reading the output file, piping it
+    -- through the demangler, and invoking the user callback.
+    vim.schedule(function()
+      local function finish(result)
+        rmtree(src_dir)
         callback(result)
-      end)
-    end
-
-    if obj.code ~= 0 then
-      finish({
-        ok = false,
-        asm = (obj.stderr and obj.stderr ~= "") and obj.stderr or (obj.stdout or ""),
-        exit_code = obj.code,
-        duration_ms = elapsed_ms,
-      })
-      return
-    end
-
-    local fh = io.open(out_path, "r")
-    if not fh then
-      finish({
-        ok = false,
-        asm = "asmview: compiler exited 0 but no output at " .. out_path,
-        exit_code = obj.code,
-        duration_ms = elapsed_ms,
-      })
-      return
-    end
-    local asm = fh:read("*a") or ""
-    fh:close()
-
-    if cfg.demangle then
-      local tool = pick_demangler(request.filetype, deps)
-      if tool then
-        asm = demangle(tool, asm, deps)
       end
-    end
 
-    finish({ ok = true, asm = asm, exit_code = 0, duration_ms = elapsed_ms })
+      if obj.code ~= 0 then
+        finish({
+          ok = false,
+          asm = (obj.stderr and obj.stderr ~= "") and obj.stderr or (obj.stdout or ""),
+          exit_code = obj.code,
+          duration_ms = elapsed_ms,
+        })
+        return
+      end
+
+      local fh = io.open(out_path, "r")
+      if not fh then
+        finish({
+          ok = false,
+          asm = "asmview: compiler exited 0 but no output at " .. out_path,
+          exit_code = obj.code,
+          duration_ms = elapsed_ms,
+        })
+        return
+      end
+      local asm = fh:read("*a") or ""
+      fh:close()
+
+      local function deliver(final_asm)
+        finish({ ok = true, asm = final_asm, exit_code = 0, duration_ms = elapsed_ms })
+      end
+
+      if cfg.demangle then
+        local tool = pick_demangler(request.filetype, deps)
+        if tool then
+          demangle(tool, asm, deps, function(demangled)
+            vim.schedule(function()
+              deliver(demangled)
+            end)
+          end)
+          return
+        end
+      end
+      deliver(asm)
+    end)
   end)
 
-  if not handle then
+  if not ok_spawn or not handle then
     rmtree(src_dir)
     callback({
       ok = false,
-      asm = "asmview: failed to spawn " .. argv[1],
+      asm = "asmview: failed to spawn " .. argv[1] .. (ok_spawn and "" or ": " .. tostring(handle)),
       exit_code = -1,
       duration_ms = 0,
     })
@@ -301,6 +345,9 @@ local function run_go(request, cfg, callback, deps)
   local system = deps.system or vim.system
   local now = deps.now or uv.hrtime
 
+  -- Same sync-on-main trade-off as write_temp_source above: fs_mkdtemp and
+  -- the two write_file calls below block for microseconds on local /tmp.
+  -- Documented at the top of write_temp_source.
   local dir = uv.fs_mkdtemp((uv.os_tmpdir() or "/tmp") .. "/asmview-XXXXXX")
   if not dir then
     callback({ ok = false, asm = "asmview: failed to create temp dir", exit_code = -1, duration_ms = 0 })
@@ -321,29 +368,29 @@ local function run_go(request, cfg, callback, deps)
   local argv = M.build_go_argv(request, cfg, out_bin)
   local started = now()
 
-  local handle = system(argv, { cwd = dir, text = true }, function(obj)
+  -- Same pcall-around-vim.system discipline as run_file_based: shepherd the
+  -- "raised on invalid argv" case into the same callback error path.
+  local ok_spawn, handle = pcall(system, argv, { cwd = dir, text = true }, function(obj)
     local elapsed_ms = math.floor((now() - started) / 1e6)
-    local function finish(result)
-      rmtree(dir)
-      vim.schedule(function()
-        callback(result)
-      end)
-    end
-
     local asm = (obj.stderr and obj.stderr ~= "") and obj.stderr or (obj.stdout or "")
-    finish({
-      ok = obj.code == 0,
-      asm = asm,
-      exit_code = obj.code,
-      duration_ms = elapsed_ms,
-    })
+    -- Hop to the main thread before touching libuv file ops or invoking the
+    -- user callback — same discipline as run_file_based.
+    vim.schedule(function()
+      rmtree(dir)
+      callback({
+        ok = obj.code == 0,
+        asm = asm,
+        exit_code = obj.code,
+        duration_ms = elapsed_ms,
+      })
+    end)
   end)
 
-  if not handle then
+  if not ok_spawn or not handle then
     rmtree(dir)
     callback({
       ok = false,
-      asm = "asmview: failed to spawn " .. argv[1],
+      asm = "asmview: failed to spawn " .. argv[1] .. (ok_spawn and "" or ": " .. tostring(handle)),
       exit_code = -1,
       duration_ms = 0,
     })

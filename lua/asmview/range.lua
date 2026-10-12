@@ -5,9 +5,12 @@
 local M = {}
 
 -- Cap on the treesitter ancestor walk. Real-world source files bottom out at
--- an AST depth of a few dozen; 1000 is comfortably above anything handwritten
--- and keeps the loop bounded per rules/algorithmic-complexity.md on
--- user-controlled input (the buffer the user is viewing).
+-- an AST depth of a few dozen (deeply-nested class/namespace/scope hierarchies
+-- rarely exceed 50); 1000 is comfortably above anything handwritten and keeps
+-- the loop bounded per rules/algorithmic-complexity.md on user-controlled
+-- input (the buffer the user is viewing). Hitting the cap means a
+-- pathological AST; we fall through to the brace-balanced fallback rather
+-- than loop forever.
 local MAX_AST_DEPTH = 1000
 
 ---Return the lines (1-based, inclusive) of the current visual selection in `bufnr`.
@@ -25,7 +28,9 @@ local function visual_marks(bufnr)
 end
 
 ---Climb up from `start_line` looking for an opening function-like line. Caps
----at `max_scan` lines to keep the loop bounded on large buffers.
+---at `max_scan` lines to keep the loop bounded on large buffers. Fetches the
+---candidate range in one `nvim_buf_get_lines` call rather than per-line, to
+---avoid N msgpack round-trips for large `max_scan` values.
 ---Returns the 1-based line of the opening brace, or nil.
 ---@param bufnr integer
 ---@param start_line integer 1-based
@@ -33,8 +38,10 @@ end
 ---@return integer? opening_line
 local function find_opening(bufnr, start_line, max_scan)
   local stop = math.max(1, start_line - max_scan)
-  for lnum = start_line, stop, -1 do
-    local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1]
+  local lines = vim.api.nvim_buf_get_lines(bufnr, stop - 1, start_line, false)
+  -- `lines[1]` is the content of row `stop`; `lines[#lines]` is `start_line`.
+  for i = #lines, 1, -1 do
+    local line = lines[i]
     if line then
       -- A top-level definition line usually ends with `{` or starts with a
       -- language-specific function keyword. Accepted shapes:
@@ -42,10 +49,10 @@ local function find_opening(bufnr, start_line, max_scan)
       --   Rust   : `fn ` / `pub fn `
       --   Go     : `func ` (freestanding) or `func (recv) ` (method)
       if line:match("^%s*fn%s") or line:match("^%s*pub%s+fn%s") or line:match("^%s*func%s") then
-        return lnum
+        return stop + i - 1
       end
       if line:match("{%s*$") then
-        return lnum
+        return stop + i - 1
       end
     end
   end
@@ -53,7 +60,8 @@ local function find_opening(bufnr, start_line, max_scan)
 end
 
 ---Walk forward balancing braces to find the function's closing line.
----Capped at `max_scan` lines.
+---Capped at `max_scan` lines. Fetches the forward range in one
+---`nvim_buf_get_lines` call for the same reason as `find_opening`.
 ---@param bufnr integer
 ---@param open_line integer 1-based opening line
 ---@param max_scan integer
@@ -61,18 +69,23 @@ end
 local function find_closing(bufnr, open_line, max_scan)
   local total = vim.api.nvim_buf_line_count(bufnr)
   local last = math.min(total, open_line + max_scan)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, open_line - 1, last, false)
   local depth = 0
   local seen_open = false
-  for lnum = open_line, last do
-    local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, false)[1] or ""
-    for ch in line:gmatch("[{}]") do
+  for i, line in ipairs(lines) do
+    -- Strip the two most common single-line comment forms before brace
+    -- counting so `-- {x}` or `// {x}` doesn't skew the depth counter.
+    -- Braces inside string literals remain a known limitation; the
+    -- treesitter path is the primary strategy and handles that correctly.
+    local stripped = line:gsub("//[^\n]*", ""):gsub("%-%-[^\n]*", "")
+    for ch in stripped:gmatch("[{}]") do
       if ch == "{" then
         depth = depth + 1
         seen_open = true
       else
         depth = depth - 1
         if seen_open and depth <= 0 then
-          return lnum
+          return open_line + i - 1
         end
       end
     end
@@ -145,11 +158,25 @@ end
 ---Resolve the request range from caller context.
 ---`opts.line1`/`opts.line2` from the user-command range take precedence over cursor.
 ---Pass `opts.visual = true` when the command fired from visual mode.
+---
+---**Precondition** when the cursor-mode branch runs: `bufnr` must be the
+---buffer currently shown in the active window. `nvim_win_get_cursor(0)` is
+---used to find the cursor line, so passing a background buffer here will
+---pick up the active window's cursor and compile the wrong range. Callers
+---outside the `:Asm` command path should supply `opts.line1`.
 ---@param bufnr integer
 ---@param opts { line1?: integer, line2?: integer, visual?: boolean, scan_cap?: integer }
 ---@return asmview.Range? range, string? error
 function M.resolve(bufnr, opts)
   opts = opts or {}
+  vim.validate({
+    bufnr = { bufnr, "number" },
+    opts = { opts, "table" },
+    line1 = { opts.line1, { "number", "nil" } },
+    line2 = { opts.line2, { "number", "nil" } },
+    visual = { opts.visual, { "boolean", "nil" } },
+    scan_cap = { opts.scan_cap, { "number", "nil" } },
+  })
   local scan_cap = opts.scan_cap or 2000
 
   if opts.visual then

@@ -96,6 +96,25 @@ describe("asmview.health", function()
     assert.is_true(vim.tbl_contains(infos, "demangle disabled"))
   end)
 
+  it("emits health.error for a compiler key that was removed from the config", function()
+    local fake_config = {
+      get = function()
+        return {
+          demangle = false,
+          compilers = {
+            cpp = { cmd = "c++", extra_args = {} },
+            rust = { cmd = "rustc", extra_args = {} },
+            go = { cmd = "go", extra_args = {} },
+            -- c is deliberately absent
+          },
+        }
+      end,
+    }
+    health.check({ health = fake_health, executable = fake_executable, config = fake_config })
+    local errors = events_of_kind("error")
+    assert.is_true(vim.tbl_contains(errors, "compilers.c.cmd missing or invalid"))
+  end)
+
   it("errors when the config module reports a missing compilers table", function()
     require("asmview.config").setup({})
     -- Inject a config whose get() lacks `compilers`.

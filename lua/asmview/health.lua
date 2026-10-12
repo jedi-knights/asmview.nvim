@@ -39,10 +39,18 @@ function M.check(deps)
   end
 
   health.start("asmview — compilers")
-  check_exe(cfg.compilers.c.cmd)
-  check_exe(cfg.compilers.cpp.cmd)
-  check_exe(cfg.compilers.rust.cmd)
-  check_exe(cfg.compilers.go.cmd)
+  local function check_lang(lang)
+    local spec = cfg.compilers[lang]
+    if not spec or type(spec.cmd) ~= "string" then
+      health.error("compilers." .. lang .. ".cmd missing or invalid")
+      return
+    end
+    check_exe(spec.cmd)
+  end
+  check_lang("c")
+  check_lang("cpp")
+  check_lang("rust")
+  check_lang("go")
 
   health.start("asmview — demanglers (optional)")
   if cfg.demangle then

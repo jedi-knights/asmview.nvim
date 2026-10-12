@@ -253,13 +253,11 @@ describe("asmview.compile", function()
           end,
           system = function(argv, _, callback)
             if argv[1] == "c++filt" then
-              -- Synchronous :wait()-style handle used by the demangle helper.
+              -- Async demangle: the stub fires the callback instead of
+              -- returning a :wait()-style handle.
               saw_cxxfilt = true
-              return {
-                wait = function()
-                  return { code = 0, stdout = "demangled!\n", stderr = "" }
-                end,
-              }
+              callback({ code = 0, stdout = "demangled!\n", stderr = "" })
+              return {}
             end
             -- Compiler path: write the expected asm file.
             for i, v in ipairs(argv) do
@@ -299,11 +297,8 @@ describe("asmview.compile", function()
           end,
           system = function(argv, _, callback)
             if argv[1] == "c++filt" then
-              return {
-                wait = function()
-                  return { code = 1, stdout = "", stderr = "oops" }
-                end,
-              }
+              callback({ code = 1, stdout = "", stderr = "oops" })
+              return {}
             end
             for i, v in ipairs(argv) do
               if v == "-o" then

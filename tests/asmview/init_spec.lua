@@ -82,6 +82,29 @@ describe("asmview", function()
       assert.truthy(d.notified[1].msg:find("filetype not supported"))
     end)
 
+    it("bails and notifies when the compilers table has no entry for the detected filetype", function()
+      local d = base_deps()
+      -- Simulate a config whose `compilers` table has no entry for `c`.
+      -- `vim.tbl_deep_extend` can't null a key — it treats nil as absent — so
+      -- stub `config.get()` to return a shape that explicitly omits `c`.
+      d.config = {
+        get = function()
+          return {
+            notify_title = "asmview-test",
+            use_compile_commands = false,
+            compilers = {
+              cpp = { cmd = "c++", extra_args = {} },
+              rust = { cmd = "rustc", extra_args = {} },
+              go = { cmd = "go", extra_args = {} },
+            },
+          }
+        end,
+      }
+      local ok = asmview.show(nil, d)
+      assert.is_false(ok)
+      assert.truthy(d.notified[1].msg:find("no compiler configured", 1, true))
+    end)
+
     it("bails and notifies when the compiler is not on PATH", function()
       local d = base_deps()
       d.detect.has_executable = function()

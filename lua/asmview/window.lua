@@ -74,7 +74,9 @@ local function render(state, cfg, result)
 end
 
 ---Cycle `current` within `levels` by `delta` positions, clamped to the array
----(no wraparound — the upstream behavior is similarly bounded).
+---(no wraparound — the upstream behavior is similarly bounded). Public only
+---so specs can exercise it; not part of the plugin's external contract.
+---@package
 ---@param levels string[]
 ---@param current string
 ---@param delta integer
@@ -99,18 +101,41 @@ local function recompile(state, cfg, compile)
   if state.busy then
     return
   end
+  -- Guard against the source buffer having been wiped between keymap press
+  -- and now. `nvim_buf_get_name` on an invalid bufnr raises; the user would
+  -- see a traceback on the next `R` after `:bdelete`-ing the source file.
+  if not vim.api.nvim_buf_is_valid(state.source_bufnr) then
+    vim.api.nvim_set_option_value("modifiable", true, { buf = state.bufnr })
+    vim.api.nvim_buf_set_lines(state.bufnr, 0, -1, false, {
+      "; asmview — source buffer no longer valid",
+    })
+    vim.api.nvim_set_option_value("modifiable", false, { buf = state.bufnr })
+    return
+  end
   state.busy = true
   vim.api.nvim_set_option_value("modifiable", true, { buf = state.bufnr })
   vim.api.nvim_buf_set_lines(state.bufnr, 0, -1, false, { "; asmview — compiling (-O" .. state.opt_level .. ")..." })
   vim.api.nvim_set_option_value("modifiable", false, { buf = state.bufnr })
 
+  -- Re-fetch the current content of the source range so that `R` after an
+  -- edit compiles what the user sees, not the snapshot frozen at open-time.
+  local lines = vim.api.nvim_buf_get_lines(state.source_bufnr, state.range.start_line - 1, state.range.end_line, false)
+  local current_source = table.concat(lines, "\n")
+
+  -- An unsaved buffer returns "" from nvim_buf_get_name, and
+  -- fnamemodify("", ":h") yields "." — which resolves against nvim's own
+  -- cwd, usually not where the user expected the compile to run. Fall back
+  -- to vim.fn.getcwd() in that case so the compiler sees the project root.
+  local source_name = vim.api.nvim_buf_get_name(state.source_bufnr)
+  local cwd = source_name ~= "" and vim.fn.fnamemodify(source_name, ":h") or vim.fn.getcwd()
+
   ---@type asmview.Request
   local request = {
     bufnr = state.source_bufnr,
     filetype = state.filetype,
-    source = state.range.source,
+    source = current_source,
     opt_level = state.opt_level,
-    cwd = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(state.source_bufnr), ":h"),
+    cwd = cwd,
     cflags = state.cflags,
     go_header = state.go_header,
   }
@@ -176,6 +201,7 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile)
   vim.api.nvim_set_option_value("swapfile", false, { buf = bufnr })
 
   local win = vim.api.nvim_open_win(bufnr, true, float_opts(cfg))
+  assert(vim.api.nvim_win_is_valid(win), "asmview: nvim_open_win returned an invalid handle")
   vim.api.nvim_set_option_value("wrap", false, { win = win })
   vim.api.nvim_set_option_value("number", false, { win = win })
   vim.api.nvim_set_option_value("relativenumber", false, { win = win })
@@ -195,8 +221,10 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile)
   State[bufnr] = state
 
   vim.api.nvim_create_autocmd("BufWipeout", {
+    group = vim.api.nvim_create_augroup("asmview_window_" .. bufnr, { clear = true }),
     buffer = bufnr,
     once = true,
+    desc = "asmview: drop per-window state on buffer wipe",
     callback = function()
       State[bufnr] = nil
     end,

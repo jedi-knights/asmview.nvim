@@ -61,6 +61,10 @@ function M.show(cmd_args, deps)
   end
 
   local spec = cfg.compilers[ft]
+  if not spec or type(spec.cmd) ~= "string" then
+    notify("asmview: no compiler configured for filetype " .. ft, vim.log.levels.ERROR, { title = cfg.notify_title })
+    return false
+  end
   if not detect.has_executable(spec.cmd, deps) then
     notify("asmview: compiler not found on PATH: " .. spec.cmd, vim.log.levels.ERROR, { title = cfg.notify_title })
     return false
@@ -89,7 +93,7 @@ function M.show(cmd_args, deps)
     go_header = detect.go_header(bufnr, deps)
   end
 
-  window.open(bufnr, resolved, ft, cflags, go_header, cfg, compile)
+  window.open(bufnr, resolved, ft, cflags, go_header, cfg, compile) -- returned handle intentionally unused: window.lua owns the state table and the BufWipeout autocmd reclaims it
   return true
 end
 
