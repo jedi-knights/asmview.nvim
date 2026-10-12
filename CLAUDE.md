@@ -56,6 +56,8 @@ Main is protected (`pull_request`, `non_fast_forward`, `deletion` rules). **Neve
 
 Release workflow fires on main pushes via `workflow_run` after CI succeeds; `jedi-knights/go-semantic-release@v0.11.0` picks the next tag from commit types. **Owner and repo are configured in `.semantic-release.yaml` at the repo root** — without that file the action silently POSTs to `/repos///releases` and 404s (upstream `jedi-knights/go-semantic-release#35`).
 
+**CHANGELOG.md maintenance.** On every release-bumping merge to main (anything that produces a new `v0.x.y` tag), add a top-level section under `## [Unreleased]` in `CHANGELOG.md` with the new version and date, in Keep-a-Changelog format. Also update the compare-URL footer. The file is maintained manually rather than via `go-semantic-release`'s `changelog_file` prepare step, because the auto-commit requires push-to-main authority that this repo's branch ruleset denies the default `GITHUB_TOKEN` (same reason the Badge workflow doesn't auto-commit the Coverage %). The GitHub Releases page remains the authoritative per-release source; `CHANGELOG.md` is the human-readable summary at the repo root.
+
 ## Testing
 
 - Runner: `neospec` (same as yoda.nvim; shares the composite install action).
