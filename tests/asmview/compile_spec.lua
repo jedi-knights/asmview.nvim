@@ -1,7 +1,8 @@
 -- tests/asmview/compile_spec.lua
--- Characterization tests for the pure argv-builder surface of asmview.compile.
--- End-to-end compilation (vim.system spawn + stderr capture) is not covered
--- here; those are integration concerns that need a real compiler.
+-- Characterization tests for asmview.compile. Covers the pure argv-builder
+-- surface and the run() dispatcher via an injected vim.system fake — no
+-- actual compilers are invoked. End-to-end integration (real cc/c++/rustc/go
+-- spawning) belongs in a separate tier.
 
 describe("asmview.compile", function()
   local compile, config
@@ -105,6 +106,185 @@ describe("asmview.compile", function()
     it("defaults to a bare `package main` when go_header is nil", function()
       local src = compile.build_go_source({ source = "func foo() {}" })
       assert.truthy(src:find("package main"))
+    end)
+  end)
+
+  describe("run() — dispatcher + run_file_based (C/C++/Rust)", function()
+    local function wait_for(flag_ref, timeout_ms)
+      vim.wait(timeout_ms or 500, function()
+        return flag_ref.done
+      end)
+    end
+
+    it("spawns the configured compiler for a C request", function()
+      local captured
+      local flag = {}
+      local system_stub = function(argv, _, callback)
+        captured = argv
+        -- Fail path: exit code non-zero so run_file_based doesn't try to
+        -- read a non-existent output file.
+        callback({ code = 1, stdout = "", stderr = "simulated compile failure" })
+        return {}
+      end
+
+      compile.run(
+        { filetype = "c", source = "int foo(){return 0;}", opt_level = "2", cwd = "/tmp", cflags = {} },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        { system = system_stub }
+      )
+      wait_for(flag)
+      assert.is_true(flag.done)
+      assert.equals("cc", captured[1])
+      assert.is_false(flag.result.ok)
+      assert.equals(1, flag.result.exit_code)
+      assert.truthy(flag.result.asm:find("simulated compile failure"))
+    end)
+
+    it("reports an exit-0-with-no-output as a failure", function()
+      local flag = {}
+      compile.run(
+        { filetype = "cpp", source = "int main(){}", opt_level = "2", cwd = "/tmp", cflags = {} },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          system = function(_, _, callback)
+            callback({ code = 0, stdout = "", stderr = "" })
+            return {}
+          end,
+        }
+      )
+      vim.wait(500, function()
+        return flag.done
+      end)
+      assert.is_false(flag.result.ok)
+      assert.truthy(flag.result.asm:find("compiler exited 0 but no output"))
+    end)
+
+    it("reports a spawn failure when vim.system returns no handle", function()
+      local flag = {}
+      compile.run(
+        { filetype = "c", source = "x", opt_level = "2", cwd = "/tmp", cflags = {} },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          system = function()
+            return nil
+          end,
+        }
+      )
+      -- No vim.schedule involved on the spawn-failure path — callback is
+      -- invoked synchronously.
+      assert.is_true(flag.done)
+      assert.is_false(flag.result.ok)
+      assert.truthy(flag.result.asm:find("failed to spawn"))
+    end)
+  end)
+
+  describe("run() — Go path", function()
+    it("captures stderr as asm when go build exits 0", function()
+      local captured_argv, captured_cwd
+      local flag = {}
+      compile.run(
+        {
+          filetype = "go",
+          source = "func foo() {}",
+          opt_level = "2",
+          cwd = "/does/not/matter",
+          cflags = {},
+          go_header = "package main\n",
+        },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          system = function(argv, opts, callback)
+            captured_argv = argv
+            captured_cwd = opts.cwd
+            callback({ code = 0, stdout = "", stderr = "main.foo STEXT size=16\nMOVQ ..." })
+            return {}
+          end,
+        }
+      )
+      vim.wait(500, function()
+        return flag.done
+      end)
+      assert.equals("go", captured_argv[1])
+      assert.equals("build", captured_argv[2])
+      -- cwd should be the temp module directory the run_go helper created,
+      -- not the request.cwd we passed in.
+      assert.not_equals("/does/not/matter", captured_cwd)
+      assert.is_true(flag.result.ok)
+      assert.truthy(flag.result.asm:find("STEXT"))
+    end)
+
+    it("reports failure when go build exits non-zero", function()
+      local flag = {}
+      compile.run(
+        {
+          filetype = "go",
+          source = "func foo() {}",
+          opt_level = "0",
+          cwd = "/",
+          cflags = {},
+          go_header = "package main\n",
+        },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          system = function(_, _, callback)
+            callback({ code = 2, stdout = "", stderr = "./snippet.go:1: undefined: X" })
+            return {}
+          end,
+        }
+      )
+      vim.wait(500, function()
+        return flag.done
+      end)
+      assert.is_false(flag.result.ok)
+      assert.equals(2, flag.result.exit_code)
+      assert.truthy(flag.result.asm:find("undefined: X"))
+    end)
+
+    it("reports a spawn failure on the Go path", function()
+      local flag = {}
+      compile.run(
+        {
+          filetype = "go",
+          source = "func foo() {}",
+          opt_level = "2",
+          cwd = "/",
+          cflags = {},
+          go_header = "package main\n",
+        },
+        config.get(),
+        function(result)
+          flag.result = result
+          flag.done = true
+        end,
+        {
+          system = function()
+            return nil
+          end,
+        }
+      )
+      assert.is_true(flag.done)
+      assert.is_false(flag.result.ok)
+      assert.truthy(flag.result.asm:find("failed to spawn"))
     end)
   end)
 end)

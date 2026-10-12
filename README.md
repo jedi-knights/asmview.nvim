@@ -3,8 +3,8 @@
 <p>
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/ci.yml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml/badge.svg" alt="Badge"></a>
-  <img src="https://img.shields.io/badge/Tests-50%20passing-brightgreen" alt="Tests">
-  <a href="https://jedi-knights.github.io/asmview.nvim/"><img src="https://img.shields.io/badge/Coverage-42%2E8%25-red" alt="Coverage"></a>
+  <img src="https://img.shields.io/badge/Tests-78%20passing-brightgreen" alt="Tests">
+  <a href="https://jedi-knights.github.io/asmview.nvim/"><img src="https://img.shields.io/badge/Coverage-82%2E4%25-green" alt="Coverage"></a>
 </p>
 
 Compile the function under your cursor to assembly and display it in a floating
