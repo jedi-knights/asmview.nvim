@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0 (2026-10-13)
+
+### Features
+
+- recompile automatically when the source buffer is saved (#20) (4909cb6)
+
 ## 1.0.1 (2026-10-13)
 
 ### Bug Fixes
