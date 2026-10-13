@@ -18,6 +18,8 @@ local M = {}
 ---@field busy boolean True while a compile is in flight
 ---@field src_basename string Temp snippet basename ("snippet.c" / "snippet.go" / ...)
 ---@field line_map? asmview.LineMap Last built source→asm map (nil before first render)
+---@field start_mark? integer Extmark on source_bufnr tracking range.start_line across edits
+---@field end_mark? integer Extmark on source_bufnr tracking range.end_line across edits
 
 local State = {}
 
@@ -26,6 +28,41 @@ local State = {}
 -- highlight.attach uses this constant to shift those indices into
 -- 0-based buffer rows.
 local ASM_BODY_OFFSET = 2
+
+-- Namespace for the two extmarks that track the compiled range across edits
+-- in the source buffer. Keeping them in a dedicated namespace lets BufWipeout
+-- clear the pair without touching highlights or other plugins' marks.
+local RANGE_NS = vim.api.nvim_create_namespace("asmview_range")
+
+---Read the extmark-tracked range from the source buffer and update
+---`state.range.start_line` / `end_line` to the current positions. On any
+---failure (marks deleted, source buffer gone, obviously-broken range), the
+---cached range is left as-is so the recompile still runs with the last
+---known-good values.
+---@param state asmview.Window
+local function refresh_range(state)
+  if not state.start_mark or not state.end_mark then
+    return
+  end
+  if not vim.api.nvim_buf_is_valid(state.source_bufnr) then
+    return
+  end
+  local start = vim.api.nvim_buf_get_extmark_by_id(state.source_bufnr, RANGE_NS, state.start_mark, {})
+  local stop = vim.api.nvim_buf_get_extmark_by_id(state.source_bufnr, RANGE_NS, state.end_mark, {})
+  if not start[1] or not stop[1] then
+    return
+  end
+  -- `nvim_buf_set_lines(0, -1, ...)` on a buffer wholly containing the marks
+  -- drifts them one row past the last line even though the buffer never
+  -- grew — fetch would then return an empty slice. Clamp to [0, last_row]
+  -- so a full-buffer replace reads as "range still at the top", and so a
+  -- delete past the end degrades to a sliver instead of an empty compile.
+  local last_row = vim.api.nvim_buf_line_count(state.source_bufnr) - 1
+  local start_row = math.max(0, math.min(start[1], last_row))
+  local end_row = math.max(start_row, math.min(stop[1], last_row))
+  state.range.start_line = start_row + 1
+  state.range.end_line = end_row + 1
+end
 
 ---Return the state object attached to buffer `bufnr`, or nil.
 ---@param bufnr integer
@@ -122,6 +159,11 @@ local function recompile(state, cfg, compile, mapping, highlight)
 
   -- Re-fetch the current content of the source range so that `R` after an
   -- edit compiles what the user sees, not the snapshot frozen at open-time.
+  -- Also update start_line/end_line from the tracking extmarks first — the
+  -- cached values go stale as soon as the user inserts or deletes a line
+  -- inside the function, which truncates the fetched source and typically
+  -- surfaces as a "expected '}'" compile error.
+  refresh_range(state)
   local lines = vim.api.nvim_buf_get_lines(state.source_bufnr, state.range.start_line - 1, state.range.end_line, false)
   local current_source = table.concat(lines, "\n")
 
@@ -219,6 +261,23 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile, 
   vim.wo[win].number = false
   vim.wo[win].relativenumber = false
 
+  -- Track the range with two extmarks on the source buffer so edits inside
+  -- or above the function don't produce a truncated snippet on the next
+  -- recompile. Only set when the range actually falls within the buffer —
+  -- `nvim_buf_set_extmark` raises on an out-of-range row, and clamping to a
+  -- valid row would silently rewrite state.range to the clamped values the
+  -- next time refresh_range reads the marks back. Out-of-range ranges leave
+  -- the marks nil and refresh_range becomes a no-op (recompile uses the
+  -- cached range as before this feature landed).
+  local start_mark, end_mark
+  if vim.api.nvim_buf_is_valid(source_bufnr) then
+    local line_count = vim.api.nvim_buf_line_count(source_bufnr)
+    if range.start_line >= 1 and range.end_line >= range.start_line and range.end_line <= line_count then
+      start_mark = vim.api.nvim_buf_set_extmark(source_bufnr, RANGE_NS, range.start_line - 1, 0, {})
+      end_mark = vim.api.nvim_buf_set_extmark(source_bufnr, RANGE_NS, range.end_line - 1, 0, { right_gravity = true })
+    end
+  end
+
   ---@type asmview.Window
   local state = {
     bufnr = bufnr,
@@ -233,6 +292,8 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile, 
     busy = false,
     src_basename = basename_for(filetype),
     line_map = nil,
+    start_mark = start_mark,
+    end_mark = end_mark,
   }
   State[bufnr] = state
 
@@ -260,6 +321,12 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile, 
     callback = function()
       highlight.detach(source_bufnr)
       pcall(vim.api.nvim_del_augroup_by_id, autosave_group)
+      if start_mark and vim.api.nvim_buf_is_valid(source_bufnr) then
+        pcall(vim.api.nvim_buf_del_extmark, source_bufnr, RANGE_NS, start_mark)
+      end
+      if end_mark and vim.api.nvim_buf_is_valid(source_bufnr) then
+        pcall(vim.api.nvim_buf_del_extmark, source_bufnr, RANGE_NS, end_mark)
+      end
       State[bufnr] = nil
     end,
   })
