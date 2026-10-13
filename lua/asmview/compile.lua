@@ -27,6 +27,12 @@ function M.build_argv(request, cfg, src_path, out_path)
   local argv = { spec.cmd }
 
   if request.filetype == "rust" then
+    -- `-C debuginfo=1` emits DWARF .loc directives in the asm so
+    -- mapping.lua can wire source lines to asm lines. Placed before
+    -- extra_args so a user's spec.extra_args (e.g. `-C debuginfo=2` or
+    -- `-C debuginfo=0`) wins — last-flag-wins is rustc's behavior.
+    table.insert(argv, "-C")
+    table.insert(argv, "debuginfo=1")
     for _, flag in ipairs(spec.extra_args) do
       table.insert(argv, flag)
     end
@@ -40,6 +46,11 @@ function M.build_argv(request, cfg, src_path, out_path)
   end
 
   -- C / C++
+  -- `-g1` emits minimal debug info (.file + .loc) so mapping.lua can tie
+  -- asm lines back to source. Placed before cflags+extra_args so a user's
+  -- `-g0` / `-g2` override via `cfg.compilers[lang].extra_args` wins
+  -- (gcc/clang take the last `-g*` flag they see).
+  table.insert(argv, "-g1")
   for _, flag in ipairs(request.cflags) do
     table.insert(argv, flag)
   end

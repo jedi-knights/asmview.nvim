@@ -56,4 +56,9 @@
 ---@field source string Lines joined with "\n"
 ---@field label string Human-readable label (e.g. "foo()" or "lines 10-20")
 
+---@class asmview.LineMap
+---@field by_source table<integer, integer[]> Source line (1-based, buffer-relative) → asm line indices (1-based into the raw asm text)
+---@field by_asm table<integer, integer> Reverse index: asm line → first source line that pointed at it
+---@field unmapped_asm_count integer Count of asm lines attributed to a .loc/path that did not match the compiled snippet
+
 return {}

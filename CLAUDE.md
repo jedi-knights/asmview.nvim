@@ -14,8 +14,10 @@ Context for Claude Code sessions in this repo. Keep terse — loaded on every se
 - `lua/asmview/types.lua` — LuaCATS classes. Public types belong here.
 - `lua/asmview/detect.lua` — filetype → language map, PATH probe, `compile_commands.json` walk, `go_header` extractor.
 - `lua/asmview/range.lua` — treesitter-first function range, brace-balanced fallback.
-- `lua/asmview/compile.lua` — dispatcher: `run_file_based` for C/C++/Rust (writes `-S` output), `run_go` for Go (temp module + stderr capture).
-- `lua/asmview/window.lua` — floating window, buffer-local keymaps, per-buffer state table.
+- `lua/asmview/compile.lua` — dispatcher: `run_file_based` for C/C++/Rust (writes `-S` output), `run_go` for Go (temp module + stderr capture). Injects `-g1` / `-C debuginfo=1` before user flags so `.loc` directives are available for mapping.
+- `lua/asmview/window.lua` — right-side vsplit, buffer-local keymaps, per-buffer state table. `cfg.float.*` kept dormant for backward-compat.
+- `lua/asmview/mapping.lua` — parse gas `.file`/`.loc` (C/C++/Rust) or go stderr `(file:line)` prefixes into an `asmview.LineMap` (`by_source`, `by_asm`, `unmapped_asm_count`). Named cap: `MAX_ASM_LINES = 200000`.
+- `lua/asmview/highlight.lua` — per-source-buffer augroup + `asmview_mapping` namespace. On `CursorMoved`/`CursorMovedI` places `AsmviewSourceLine` extmarks (linked to `CursorLine` by default) on mapped asm rows. Named cap: `MAX_HIGHLIGHT_EXTMARKS = 64`, with `[+N more]` virt_text tag on overflow.
 - `lua/asmview/health.lua` — `:checkhealth asmview`.
 - `doc/asmview.txt` — vimdoc.
 - `tests/minimal_init.lua` — neospec init.

@@ -1,7 +1,8 @@
 <h1 align="center">asmview.nvim</h1>
 
 <p align="center">
-  Compile the function at your cursor to assembly, in a floating window, without leaving Neovim.
+  Compile the function at your cursor to assembly, side-by-side with your source, with the asm lines
+  for the current source line highlighted as you navigate.
 </p>
 
 <p align="center">
@@ -47,12 +48,13 @@ between the snippet you tested on godbolt and the function your build
 actually ships.
 
 **asmview** does the same thing inside the editor. Put the cursor on a
-function, run `:Asm`, and a floating window shows the assembly — compiled with
-the real toolchain on your `$PATH`, the real flags from your
+function, run `:Asm`, and a right-side vertical split shows the assembly —
+compiled with the real toolchain on your `$PATH`, the real flags from your
 `compile_commands.json`, and the function selected directly from your current
-buffer. `+` and `-` cycle through optimization levels in place. `R` reruns the
-compiler. No browser, no copy-paste, no divergence between what you see and
-what ships.
+buffer. As you navigate the source, the asm lines that correspond to the
+current source line light up on the right. `+` and `-` cycle through
+optimization levels in place. `R` reruns the compiler. No browser, no
+copy-paste, no divergence between what you see and what ships.
 
 Supports **C**, **C++**, **Rust**, and **Go**. For C/C++ the exact flags from
 `compile_commands.json` are harvested (minus the input file and `-O` so you
@@ -63,6 +65,13 @@ stderr; snippets are compiled as a synthesized `package main`.
 
 - **One keystroke, no leaving the editor** — `:Asm` on the function at the
   cursor; `:'<,'>Asm` on a visual selection.
+- **Side-by-side layout** — a right-side vsplit; focus stays in source so
+  `/`, LSP, treesitter, and marks keep working as you read.
+- **Source→asm line sync** — the asm lines that correspond to the source
+  line under your cursor are highlighted via the `AsmviewSourceLine`
+  highlight group (links to `CursorLine` by default; override to taste).
+  Powered by DWARF `.loc` directives (C/C++/Rust) and the `(file:line)`
+  prefixes `go tool compile -S` emits (Go).
 - **Live optimization cycling** — `+` / `-` in the asm window re-compiles at
   the next / previous `-O` level with the same source.
 - **Honors `compile_commands.json`** — picks up the exact project flags
@@ -225,6 +234,9 @@ require("asmview").setup({
   demangle = true,                    -- pipe through c++filt / rustfilt when present
   use_compile_commands = true,
   compile_commands_search_depth = 6,  -- parent-dir hops looking for the DB
+  -- `float` is accepted for backward compatibility and currently ignored —
+  -- the asm view is a vertical split as of 0.3.0. The subtree may be
+  -- removed in a future major release.
   float = {
     width_ratio = 0.8,
     height_ratio = 0.8,
@@ -252,6 +264,19 @@ If found, it harvests the matching entry's flags but strips:
 - the input file (asmview supplies its own)
 
 Everything else — `-std=c++20`, `-I...`, `-D...`, `-Wno-…` — passes through.
+
+asmview also injects `-g1` (C/C++) or `-C debuginfo=1` (Rust) **before**
+your harvested flags, so DWARF `.loc` directives are present in the asm
+and source→asm highlighting works out of the box. To override — e.g.
+disable debug info for a cleaner asm dump — add the overriding flag to
+`cfg.compilers.<lang>.extra_args` (gcc/clang/rustc all honor last-flag-wins
+for `-g*` / `-C debuginfo=*`):
+
+```lua
+require("asmview").setup({
+  compilers = { c = { cmd = "cc", extra_args = { "-g0" } } },
+})
+```
 
 ### Go specifics
 
@@ -291,7 +316,9 @@ asmview.nvim/
 │   ├── detect.lua           — filetype map, PATH probe, compile_commands lookup
 │   ├── range.lua            — treesitter → brace-fallback range resolver
 │   ├── compile.lua          — argv build + vim.system invocation + demangle
-│   ├── window.lua           — floating window + buffer-local keymaps
+│   ├── window.lua           — right-side vsplit + buffer-local keymaps
+│   ├── mapping.lua          — parse .loc / go-stderr → source→asm line map
+│   ├── highlight.lua        — CursorMoved-driven extmark highlights
 │   └── health.lua           — :checkhealth asmview
 ├── doc/asmview.txt          — vimdoc
 └── tests/asmview/*_spec.lua — neospec specs, one file per module

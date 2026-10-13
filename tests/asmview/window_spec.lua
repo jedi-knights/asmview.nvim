@@ -75,7 +75,7 @@ describe("asmview.window", function()
       return buf
     end
 
-    it("opens a floating asm buffer, renders the header, and fires the first compile", function()
+    it("opens a vsplit asm buffer, renders the header, and fires the first compile", function()
       local source = new_source_buffer()
       local compile_stub = stub_compile({ ok = true, asm = "mov eax, 1\nret", exit_code = 0, duration_ms = 7 })
       local range = { start_line = 1, end_line = 1, source = "int foo(){return 1;}", label = "function @ line 1-1" }
@@ -221,6 +221,135 @@ describe("asmview.window", function()
 
       assert.is_table(window._state(state.bufnr))
       assert.equals(state.bufnr, window._state(state.bufnr).bufnr)
+    end)
+
+    it("opens a right-side vertical split (not a floating window)", function()
+      -- Arrange
+      local source = new_source_buffer()
+      local compile_stub = stub_compile({ ok = true, asm = "", exit_code = 0, duration_ms = 0 })
+      local range = { start_line = 1, end_line = 1, source = "x", label = "x" }
+
+      -- Act
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub)
+      table.insert(open_states, state)
+
+      -- Assert — split windows report relative="" from nvim_win_get_config
+      -- and floats report relative in {"editor","win","cursor"}. Confirm the
+      -- window is a plain split anchored on the right.
+      local wincfg = vim.api.nvim_win_get_config(state.win)
+      assert.equals("", wincfg.relative or "")
+    end)
+
+    it("passes the mapping + highlight deps through to render", function()
+      -- Arrange
+      local source = new_source_buffer()
+      local compile_stub = stub_compile({
+        ok = true,
+        asm = ".loc 1 1 1\nmov eax, 1\nret",
+        exit_code = 0,
+        duration_ms = 0,
+      })
+      local range = { start_line = 10, end_line = 11, source = "x", label = "x" }
+
+      local build_calls, attach_calls, detach_calls = {}, {}, {}
+      local stub_mapping = {
+        build = function(asm, r, ft, basename)
+          table.insert(build_calls, { asm = asm, range = r, filetype = ft, basename = basename })
+          return { by_source = {}, by_asm = {}, unmapped_asm_count = 0 }
+        end,
+      }
+      local stub_highlight = {
+        attach = function(src, asm_bufnr, offset, line_map, cfg)
+          table.insert(attach_calls, {
+            source_bufnr = src,
+            asm_bufnr = asm_bufnr,
+            offset = offset,
+            line_map = line_map,
+            cfg = cfg,
+          })
+        end,
+        detach = function(src)
+          table.insert(detach_calls, src)
+        end,
+      }
+
+      -- Act
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub, {
+        mapping = stub_mapping,
+        highlight = stub_highlight,
+      })
+      table.insert(open_states, state)
+
+      -- Assert
+      assert.equals(1, #build_calls)
+      assert.equals("c", build_calls[1].filetype)
+      assert.equals("snippet.c", build_calls[1].basename)
+      assert.equals(10, build_calls[1].range.start_line)
+      assert.equals(1, #attach_calls)
+      assert.equals(source, attach_calls[1].source_bufnr)
+      assert.equals(state.bufnr, attach_calls[1].asm_bufnr)
+      -- Offset is the header-line count the renderer prepends (header + blank).
+      assert.equals(2, attach_calls[1].offset)
+    end)
+
+    it("picks the right snippet basename per filetype", function()
+      -- Arrange — one window per filetype, injected mapping records basename.
+      local filetypes = { c = "snippet.c", cpp = "snippet.cpp", rust = "snippet.rs", go = "snippet.go" }
+
+      for ft, want in pairs(filetypes) do
+        local source = new_source_buffer()
+        local compile_stub = stub_compile({ ok = true, asm = "", exit_code = 0, duration_ms = 0 })
+        local range = { start_line = 1, end_line = 1, source = "x", label = "x" }
+        local seen
+        local stub_mapping = {
+          build = function(_, _, _, basename)
+            seen = basename
+            return { by_source = {}, by_asm = {}, unmapped_asm_count = 0 }
+          end,
+        }
+        local stub_highlight = { attach = function() end, detach = function() end }
+
+        -- Act
+        local state = window.open(source, range, ft, {}, "package main\n", config.get(), compile_stub, {
+          mapping = stub_mapping,
+          highlight = stub_highlight,
+        })
+        table.insert(open_states, state)
+
+        -- Assert
+        assert.equals(want, seen, "basename mismatch for filetype " .. ft)
+      end
+    end)
+
+    it("detaches highlight when the asm buffer is wiped", function()
+      -- Arrange
+      local source = new_source_buffer()
+      local compile_stub = stub_compile({ ok = true, asm = "", exit_code = 0, duration_ms = 0 })
+      local range = { start_line = 1, end_line = 1, source = "x", label = "x" }
+      local detach_calls = {}
+      local stub_mapping = {
+        build = function()
+          return { by_source = {}, by_asm = {}, unmapped_asm_count = 0 }
+        end,
+      }
+      local stub_highlight = {
+        attach = function() end,
+        detach = function(src)
+          table.insert(detach_calls, src)
+        end,
+      }
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub, {
+        mapping = stub_mapping,
+        highlight = stub_highlight,
+      })
+      table.insert(open_states, state)
+
+      -- Act
+      vim.api.nvim_buf_delete(state.bufnr, { force = true })
+
+      -- Assert
+      assert.equals(1, #detach_calls)
+      assert.equals(source, detach_calls[1])
     end)
   end)
 end)
