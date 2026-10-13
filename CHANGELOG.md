@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 (2026-10-13)
+
+### Bug Fixes
+
+- track the compiled range across edits via source-buffer extmarks (#21) (71cfc22)
+
 ## 1.1.0 (2026-10-13)
 
 ### Features
