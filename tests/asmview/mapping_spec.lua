@@ -79,6 +79,24 @@ describe("asmview.mapping", function()
       assert.is_true(line_map.unmapped_asm_count > 0)
     end)
 
+    it("handles the two-quoted-string .file form that LLVM/Apple clang emits", function()
+      -- Arrange: Apple clang / modern LLVM emit `.file N "dir" "basename"`
+      -- with an optional trailing md5 digest. The parser must match the
+      -- second quoted string (the filename), not the first (the dir).
+      local asm = table.concat({
+        '  .file 0 "/private/tmp/asmview-livetest" "/var/folders/x/asmview-ABC/snippet.c" md5 0xdead',
+        "  .loc 0 2 15 prologue_end",
+        "  add w8, w1, w0",
+      }, "\n")
+      local range = { start_line = 10, end_line = 15, source = "", label = "" }
+
+      -- Act
+      local line_map = mapping.build(asm, range, "c", "snippet.c")
+
+      -- Assert
+      assert.same({ 3 }, line_map.by_source[11])
+    end)
+
     it("handles .file N with absolute paths by matching on basename", function()
       -- Arrange: rustc emits absolute paths in .file directives.
       local asm = table.concat({
