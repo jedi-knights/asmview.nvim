@@ -14,7 +14,7 @@
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/badge.yaml/badge.svg" alt="Badge"></a>
   <a href="https://github.com/jedi-knights/asmview.nvim/actions/workflows/release.yml"><img src="https://github.com/jedi-knights/asmview.nvim/actions/workflows/release.yml/badge.svg" alt="Release"></a>
   <img src="https://img.shields.io/badge/Tests-98%20passing-brightgreen" alt="Tests">
-  <a href="https://jedi-knights.github.io/asmview.nvim/"><img src="https://img.shields.io/badge/Coverage-89%2E7%25-green" alt="Coverage"></a>
+  <a href="https://jedi-knights.github.io/asmview.nvim/"><img src="https://img.shields.io/badge/Coverage-90%2E3%25-brightgreen" alt="Coverage"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
   <a href="https://github.com/jedi-knights/asmview.nvim/releases/latest"><img src="https://img.shields.io/github/v/release/jedi-knights/asmview.nvim?label=release" alt="Latest release"></a>
 </p>
