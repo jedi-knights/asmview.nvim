@@ -321,6 +321,39 @@ describe("asmview.window", function()
       end
     end)
 
+    it("tracks the function range across edits so a saved buffer recompiles the full current function", function()
+      -- Arrange — a 3-line function and a trailing blank; range = lines 1-3.
+      local source = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(source, 0, -1, false, {
+        "int main() {",
+        "  return 0;",
+        "}",
+        "",
+      })
+      local compile_stub = stub_compile({ ok = true, asm = "", exit_code = 0, duration_ms = 0 })
+      local range = {
+        start_line = 1,
+        end_line = 3,
+        source = "int main() {\n  return 0;\n}",
+        label = "function @ line 1-3",
+      }
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub)
+      table.insert(open_states, state)
+
+      -- Act — insert a new statement inside the function; closing brace shifts
+      -- from line 3 to line 4.
+      vim.api.nvim_buf_set_lines(source, 1, 1, false, { "  int x = 42;" })
+      vim.api.nvim_exec_autocmds("BufWritePost", { buffer = source })
+
+      -- Assert — the second compile sees the full function including the
+      -- new line and the (now-shifted) closing brace.
+      assert.equals(2, #compile_stub.calls)
+      local src = compile_stub.calls[2].source
+      assert.truthy(src:find("int x = 42;", 1, true), "second compile missing the inserted statement")
+      assert.truthy(src:find("return 0;", 1, true), "second compile missing the pre-existing body")
+      assert.truthy(src:match("}%s*$"), "second compile missing the closing brace")
+    end)
+
     it("recompiles the asm when the source buffer is saved", function()
       -- Arrange
       local source = new_source_buffer()
