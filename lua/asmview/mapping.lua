@@ -52,7 +52,15 @@ local function parse_loc(asm, range, src_basename)
       return { by_source = {}, by_asm = {}, unmapped_asm_count = unmapped }
     end
 
-    local file_n, file_path = line:match('^%s*%.file%s+(%d+)%s+"([^"]+)"')
+    -- Two forms of `.file N` are valid gas input:
+    --   .file N "path"                    (GNU as, older LLVM)
+    --   .file N "dir" "basename"          (modern LLVM / Apple clang)
+    -- Try the two-string form first; the second quoted token is the file
+    -- part regardless of whether the dir is empty.
+    local file_n, _dir, file_path = line:match('^%s*%.file%s+(%d+)%s+"([^"]*)"%s+"([^"]+)"')
+    if not file_n then
+      file_n, file_path = line:match('^%s*%.file%s+(%d+)%s+"([^"]+)"')
+    end
     if file_n then
       files[tonumber(file_n)] = file_path
     else
