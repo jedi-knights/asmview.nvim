@@ -74,6 +74,8 @@ stderr; snippets are compiled as a synthesized `package main`.
   prefixes `go tool compile -S` emits (Go).
 - **Live optimization cycling** — `+` / `-` in the asm window re-compiles at
   the next / previous `-O` level with the same source.
+- **Recompile on save** — writing the source buffer (`:w`) refreshes the asm
+  automatically. No need to focus the asm pane and press `R`.
 - **Honors `compile_commands.json`** — picks up the exact project flags
   (CMake, Bear, meson). Strips `-c`, `-S`, `-O*`, `-o`, and the input file
   itself so asmview owns those knobs.

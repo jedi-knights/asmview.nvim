@@ -321,6 +321,41 @@ describe("asmview.window", function()
       end
     end)
 
+    it("recompiles the asm when the source buffer is saved", function()
+      -- Arrange
+      local source = new_source_buffer()
+      local compile_stub = stub_compile({ ok = true, asm = "mov eax, 1\nret", exit_code = 0, duration_ms = 0 })
+      local range = { start_line = 1, end_line = 1, source = "x", label = "x" }
+
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub)
+      table.insert(open_states, state)
+      assert.equals(1, #compile_stub.calls)
+
+      -- Act — simulate a :w on the source buffer.
+      vim.api.nvim_exec_autocmds("BufWritePost", { buffer = source })
+
+      -- Assert
+      assert.equals(2, #compile_stub.calls)
+    end)
+
+    it("stops recompiling on source save after the asm buffer is wiped", function()
+      -- Arrange
+      local source = new_source_buffer()
+      local compile_stub = stub_compile({ ok = true, asm = "", exit_code = 0, duration_ms = 0 })
+      local range = { start_line = 1, end_line = 1, source = "x", label = "x" }
+
+      local state = window.open(source, range, "c", {}, nil, config.get(), compile_stub)
+      table.insert(open_states, state)
+      vim.api.nvim_buf_delete(state.bufnr, { force = true })
+
+      -- Act
+      local before = #compile_stub.calls
+      vim.api.nvim_exec_autocmds("BufWritePost", { buffer = source })
+
+      -- Assert
+      assert.equals(before, #compile_stub.calls)
+    end)
+
     it("detaches highlight when the asm buffer is wiped", function()
       -- Arrange
       local source = new_source_buffer()
