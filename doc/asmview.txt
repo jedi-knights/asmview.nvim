@@ -24,6 +24,9 @@ Supports C, C++, Rust, and Go.
 As you navigate the source buffer, the asm lines that correspond to the
 current source line are highlighted on the right. See |asmview-line-sync|.
 
+Writing the source buffer (`:w`) automatically recompiles the asm — no
+need to focus the asm pane and press `R`.
+
 ==============================================================================
 2. REQUIREMENTS                                          *asmview-requirements*
 

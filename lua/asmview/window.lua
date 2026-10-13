@@ -236,6 +236,22 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile, 
   }
   State[bufnr] = state
 
+  local autosave_group = vim.api.nvim_create_augroup("asmview_autosave_" .. bufnr, { clear = true })
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = autosave_group,
+    buffer = source_bufnr,
+    desc = "asmview: recompile when the source buffer is saved",
+    callback = function()
+      -- Guard against stray fires after the asm buffer has been wiped —
+      -- the BufWipeout cleanup below deletes the group, but a BufWritePost
+      -- queued inside the same event cycle could race.
+      if not vim.api.nvim_buf_is_valid(bufnr) then
+        return
+      end
+      recompile(state, cfg, compile, mapping, highlight)
+    end,
+  })
+
   vim.api.nvim_create_autocmd("BufWipeout", {
     group = vim.api.nvim_create_augroup("asmview_window_" .. bufnr, { clear = true }),
     buffer = bufnr,
@@ -243,6 +259,7 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile, 
     desc = "asmview: drop per-window state on buffer wipe",
     callback = function()
       highlight.detach(source_bufnr)
+      pcall(vim.api.nvim_del_augroup_by_id, autosave_group)
       State[bufnr] = nil
     end,
   })
