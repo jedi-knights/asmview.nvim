@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 (2026-10-13)
+
+### Bug Fixes
+
+- parse LLVM/Apple-clang two-quoted-string .file form (#19) (b25450d)
+
 ## 1.0.0 (2026-10-13)
 
 ### Breaking Changes
