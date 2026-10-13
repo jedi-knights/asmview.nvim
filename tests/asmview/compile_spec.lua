@@ -79,6 +79,32 @@ describe("asmview.compile", function()
       assert.is_true(vim.tbl_contains(argv, "--edition=2021"))
     end)
 
+    it("injects -g1 by default for C/C++ (lightweight debug info for source mapping)", function()
+      local c_argv =
+        compile.build_argv({ filetype = "c", opt_level = "2", cflags = {} }, config.get(), "/tmp/x.c", "/tmp/x.s")
+      assert.is_true(vim.tbl_contains(c_argv, "-g1"))
+
+      local cpp_argv =
+        compile.build_argv({ filetype = "cpp", opt_level = "2", cflags = {} }, config.get(), "/tmp/x.cpp", "/tmp/x.s")
+      assert.is_true(vim.tbl_contains(cpp_argv, "-g1"))
+    end)
+
+    it("injects -C debuginfo=1 by default for Rust (for .loc emission)", function()
+      local argv =
+        compile.build_argv({ filetype = "rust", opt_level = "2", cflags = {} }, config.get(), "/tmp/x.rs", "/tmp/x.s")
+      -- Need both the -C flag and its value.
+      local saw_c, saw_debuginfo = false, false
+      for _, v in ipairs(argv) do
+        if v == "-C" then
+          saw_c = true
+        end
+        if v == "debuginfo=1" then
+          saw_debuginfo = true
+        end
+      end
+      assert.is_true(saw_c and saw_debuginfo)
+    end)
+
     it("prepends harvested cflags before the plugin's own flags", function()
       local argv = compile.build_argv(
         { filetype = "cpp", opt_level = "0", cflags = { "-std=c++20", "-I./inc" } },

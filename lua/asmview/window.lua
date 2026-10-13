@@ -1,21 +1,31 @@
 -- lua/asmview/window.lua
--- Floating window that renders the compiler output and holds
--- buffer-local keymaps for +/-/R/q.
+-- Vertical-split asm window that renders the compiler output next to the
+-- source buffer. Owns per-asm-buffer state, the +/-/R/q buffer-local
+-- keymaps, and the source→asm cursor-mirror highlighting.
 
 local M = {}
 
 ---@class asmview.Window
 ---@field bufnr integer Scratch buffer displaying asm
----@field win integer Window handle
+---@field win integer Window handle (right-side vsplit)
 ---@field source_bufnr integer Buffer we compiled from
+---@field source_win integer Window the vsplit was anchored to
 ---@field range asmview.Range Range we compiled
 ---@field opt_level string Current optimization level
 ---@field cflags string[] Flags harvested from compile_commands.json (frozen on open)
 ---@field go_header? string Go package + import block (Go only, frozen on open)
 ---@field filetype "c"|"cpp"|"rust"|"go"
 ---@field busy boolean True while a compile is in flight
+---@field src_basename string Temp snippet basename ("snippet.c" / "snippet.go" / ...)
+---@field line_map? asmview.LineMap Last built source→asm map (nil before first render)
 
 local State = {}
+
+-- Number of leader rows render() writes before the asm body (header + blank
+-- separator). mapping.build returns 1-based indices into the raw asm text;
+-- highlight.attach uses this constant to shift those indices into
+-- 0-based buffer rows.
+local ASM_BODY_OFFSET = 2
 
 ---Return the state object attached to buffer `bufnr`, or nil.
 ---@param bufnr integer
@@ -24,37 +34,25 @@ local function get_state(bufnr)
   return State[bufnr]
 end
 
----Compute floating-window geometry from config ratios.
----Prefers the ratio-derived size (clamped at a readable minimum), but
----never exceeds the terminal's available cells minus a small margin —
----nvim_open_win errors if width/height exceed `vim.o.columns`/`lines`.
----@param cfg asmview.Config
----@return table opts for nvim_open_win
-local function float_opts(cfg)
-  local max_width = math.max(1, vim.o.columns - 2)
-  local max_height = math.max(1, vim.o.lines - 2)
-  local pref_width = math.max(40, math.floor(vim.o.columns * cfg.float.width_ratio))
-  local pref_height = math.max(10, math.floor(vim.o.lines * cfg.float.height_ratio))
-  local width = math.min(pref_width, max_width)
-  local height = math.min(pref_height, max_height)
-  local row = math.floor((vim.o.lines - height) / 2)
-  local col = math.floor((vim.o.columns - width) / 2)
-  return {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = row,
-    col = col,
-    style = "minimal",
-    border = cfg.float.border,
-  }
+---Snippet basename the compile module writes for `filetype`. Mapping needs
+---the exact basename to filter .loc directives.
+---@param filetype "c"|"cpp"|"rust"|"go"
+---@return string
+local function basename_for(filetype)
+  if filetype == "rust" then
+    return "snippet.rs"
+  end
+  return "snippet." .. filetype
 end
 
----Replace the asm buffer contents and header.
+---Replace the asm buffer contents and header, then rebuild the source→asm
+---line map and attach the highlight autocmd.
 ---@param state asmview.Window
 ---@param cfg asmview.Config
 ---@param result asmview.Result
-local function render(state, cfg, result)
+---@param mapping table asmview.mapping module
+---@param highlight table asmview.highlight module
+local function render(state, cfg, result, mapping, highlight)
   local header = string.format(
     "; asmview — %s  opt=-O%s  syntax=%s  exit=%d  %dms%s",
     state.range.label,
@@ -68,9 +66,12 @@ local function render(state, cfg, result)
   for line in (result.asm .. "\n"):gmatch("([^\n]*)\n") do
     table.insert(lines, line)
   end
-  vim.api.nvim_set_option_value("modifiable", true, { buf = state.bufnr })
+  vim.bo[state.bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(state.bufnr, 0, -1, false, lines)
-  vim.api.nvim_set_option_value("modifiable", false, { buf = state.bufnr })
+  vim.bo[state.bufnr].modifiable = false
+
+  state.line_map = mapping.build(result.asm, state.range, state.filetype, state.src_basename)
+  highlight.attach(state.source_bufnr, state.bufnr, ASM_BODY_OFFSET, state.line_map, cfg)
 end
 
 ---Cycle `current` within `levels` by `delta` positions, clamped to the array
@@ -97,7 +98,9 @@ end
 ---@param state asmview.Window
 ---@param cfg asmview.Config
 ---@param compile table asmview.compile module (injectable)
-local function recompile(state, cfg, compile)
+---@param mapping table asmview.mapping module
+---@param highlight table asmview.highlight module
+local function recompile(state, cfg, compile, mapping, highlight)
   if state.busy then
     return
   end
@@ -105,17 +108,17 @@ local function recompile(state, cfg, compile)
   -- and now. `nvim_buf_get_name` on an invalid bufnr raises; the user would
   -- see a traceback on the next `R` after `:bdelete`-ing the source file.
   if not vim.api.nvim_buf_is_valid(state.source_bufnr) then
-    vim.api.nvim_set_option_value("modifiable", true, { buf = state.bufnr })
+    vim.bo[state.bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(state.bufnr, 0, -1, false, {
       "; asmview — source buffer no longer valid",
     })
-    vim.api.nvim_set_option_value("modifiable", false, { buf = state.bufnr })
+    vim.bo[state.bufnr].modifiable = false
     return
   end
   state.busy = true
-  vim.api.nvim_set_option_value("modifiable", true, { buf = state.bufnr })
+  vim.bo[state.bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(state.bufnr, 0, -1, false, { "; asmview — compiling (-O" .. state.opt_level .. ")..." })
-  vim.api.nvim_set_option_value("modifiable", false, { buf = state.bufnr })
+  vim.bo[state.bufnr].modifiable = false
 
   -- Re-fetch the current content of the source range so that `R` after an
   -- edit compiles what the user sees, not the snapshot frozen at open-time.
@@ -144,7 +147,7 @@ local function recompile(state, cfg, compile)
     if not vim.api.nvim_buf_is_valid(state.bufnr) then
       return
     end
-    render(state, cfg, result)
+    render(state, cfg, result, mapping, highlight)
   end)
 end
 
@@ -152,7 +155,9 @@ end
 ---@param state asmview.Window
 ---@param cfg asmview.Config
 ---@param compile table
-local function bind_keys(state, cfg, compile)
+---@param mapping table
+---@param highlight table
+local function bind_keys(state, cfg, compile, mapping, highlight)
   local km = cfg.keymaps
   local function map(lhs, fn, desc)
     vim.keymap.set("n", lhs, fn, { buffer = state.bufnr, silent = true, nowait = true, desc = desc })
@@ -162,7 +167,7 @@ local function bind_keys(state, cfg, compile)
     local next_lvl = M.cycle_opt(cfg.opt_levels, state.opt_level, 1)
     if next_lvl ~= state.opt_level then
       state.opt_level = next_lvl
-      recompile(state, cfg, compile)
+      recompile(state, cfg, compile, mapping, highlight)
     end
   end, "asmview: increase optimization")
 
@@ -170,12 +175,12 @@ local function bind_keys(state, cfg, compile)
     local next_lvl = M.cycle_opt(cfg.opt_levels, state.opt_level, -1)
     if next_lvl ~= state.opt_level then
       state.opt_level = next_lvl
-      recompile(state, cfg, compile)
+      recompile(state, cfg, compile, mapping, highlight)
     end
   end, "asmview: decrease optimization")
 
   map(km.rerun, function()
-    recompile(state, cfg, compile)
+    recompile(state, cfg, compile, mapping, highlight)
   end, "asmview: rerun")
 
   map(km.close, function()
@@ -185,7 +190,9 @@ local function bind_keys(state, cfg, compile)
   end, "asmview: close")
 end
 
----Open a floating window for `request` and kick off the first compile.
+---Open the asm vsplit for `source_bufnr` and kick off the first compile.
+---Focus stays in the source window; the user does not have to :wincmd back
+---after `:Asm`.
 ---@param source_bufnr integer
 ---@param range asmview.Range
 ---@param filetype "c"|"cpp"|"rust"|"go"
@@ -193,30 +200,39 @@ end
 ---@param go_header? string Go package + import block (Go only)
 ---@param cfg asmview.Config
 ---@param compile table asmview.compile module
+---@param deps? table Override hooks: { mapping, highlight, source_win }.
 ---@return asmview.Window
-function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile)
-  local bufnr = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_set_option_value("filetype", "asm", { buf = bufnr })
-  vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = bufnr })
-  vim.api.nvim_set_option_value("swapfile", false, { buf = bufnr })
+function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile, deps)
+  deps = deps or {}
+  local mapping = deps.mapping or require("asmview.mapping")
+  local highlight = deps.highlight or require("asmview.highlight")
+  local source_win = deps.source_win or vim.api.nvim_get_current_win()
 
-  local win = vim.api.nvim_open_win(bufnr, true, float_opts(cfg))
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].filetype = "asm"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+
+  local win = vim.api.nvim_open_win(bufnr, false, { split = "right", win = source_win })
   assert(vim.api.nvim_win_is_valid(win), "asmview: nvim_open_win returned an invalid handle")
-  vim.api.nvim_set_option_value("wrap", false, { win = win })
-  vim.api.nvim_set_option_value("number", false, { win = win })
-  vim.api.nvim_set_option_value("relativenumber", false, { win = win })
+  vim.wo[win].wrap = false
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
 
   ---@type asmview.Window
   local state = {
     bufnr = bufnr,
     win = win,
     source_bufnr = source_bufnr,
+    source_win = source_win,
     range = range,
     opt_level = cfg.default_opt,
     cflags = cflags,
     go_header = go_header,
     filetype = filetype,
     busy = false,
+    src_basename = basename_for(filetype),
+    line_map = nil,
   }
   State[bufnr] = state
 
@@ -226,12 +242,13 @@ function M.open(source_bufnr, range, filetype, cflags, go_header, cfg, compile)
     once = true,
     desc = "asmview: drop per-window state on buffer wipe",
     callback = function()
+      highlight.detach(source_bufnr)
       State[bufnr] = nil
     end,
   })
 
-  bind_keys(state, cfg, compile)
-  recompile(state, cfg, compile)
+  bind_keys(state, cfg, compile, mapping, highlight)
+  recompile(state, cfg, compile, mapping, highlight)
   return state
 end
 

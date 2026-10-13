@@ -1,4 +1,4 @@
-*asmview.txt*  Show C/C++/Rust/Go assembly in a floating window
+*asmview.txt*  Show C/C++/Rust/Go assembly in a side-by-side vsplit
 
 ==============================================================================
 CONTENTS                                                     *asmview-contents*
@@ -9,16 +9,20 @@ CONTENTS                                                     *asmview-contents*
   4. Commands ................................ |asmview-commands|
   5. Mappings ................................ |asmview-mappings|
   6. Window keys ............................. |asmview-window-keys|
-  7. Configuration ........................... |asmview-config|
-  8. compile_commands.json ................... |asmview-compile-commands|
-  9. Health .................................. |asmview-health|
+  7. Source line sync ........................ |asmview-line-sync|
+  8. Configuration ........................... |asmview-config|
+  9. compile_commands.json ................... |asmview-compile-commands|
+ 10. Health .................................. |asmview-health|
 
 ==============================================================================
 1. INTRO                                                        *asmview-intro*
 
 asmview.nvim compiles the function surrounding the cursor (or an explicit
-range) to assembly and displays the result in a floating window. Supports
-C, C++, Rust, and Go.
+range) to assembly and shows the result in a right-side vertical split.
+Supports C, C++, Rust, and Go.
+
+As you navigate the source buffer, the asm lines that correspond to the
+current source line are highlighted on the right. See |asmview-line-sync|.
 
 ==============================================================================
 2. REQUIREMENTS                                          *asmview-requirements*
@@ -45,7 +49,8 @@ wins.
 :[range]Asm
     Compile and show assembly. With no range, uses the function enclosing the
     cursor. With `:'<,'>Asm` or any explicit range of 2+ lines, uses those
-    lines verbatim.
+    lines verbatim. Opens a right-side vertical split holding the asm
+    buffer; focus stays in the source window.
 
 ==============================================================================
 5. MAPPINGS                                                  *asmview-mappings*
@@ -62,15 +67,49 @@ wins.
 ==============================================================================
 6. WINDOW KEYS                                            *asmview-window-keys*
 
-Buffer-local maps inside the asm window (customize via `keymaps` in setup):
+Buffer-local maps inside the asm window (customize via `keymaps` in setup).
+Move focus into the asm vsplit first (e.g. CTRL-W l) to use them:
 
   `+`   increase optimization level (clamped at the end of `opt_levels`)
   `-`   decrease optimization level
   `R`   rerun the compiler with the current parameters
-  `q`   close the window
+  `q`   close the vsplit (the asm buffer is wiped; source stays)
 
 ==============================================================================
-7. CONFIGURATION                                              *asmview-config*
+7. SOURCE LINE SYNC                                        *asmview-line-sync*
+
+                                                       *AsmviewSourceLine*
+While the asm vsplit is open, every time the cursor moves in the source
+buffer, the asm lines mapped to that source line are highlighted via the
+`AsmviewSourceLine` highlight group. The group is defined with
+`default = true` and links to `CursorLine`, so colorschemes may override it:
+>
+    vim.api.nvim_set_hl(0, "AsmviewSourceLine", { bg = "#2d2d4a" })
+<
+
+How the mapping is built:
+
+- C / C++ : asmview injects `-g1` (minimal DWARF debug info). gcc / clang
+  emit `.file` + `.loc` directives that identify the source line for each
+  asm block.
+- Rust    : asmview injects `-C debuginfo=1`. rustc emits the same gas
+  `.loc` form.
+- Go      : `go tool compile -S` already prefixes each instruction with
+  `(file:line)`. No flag change is needed.
+
+To disable debug info (and therefore line sync), override the injection via
+`compilers.<lang>.extra_args` — the last `-g*` / `-C debuginfo=*` wins:
+>
+    require("asmview").setup({
+      compilers = { c = { cmd = "cc", extra_args = { "-g0" } } },
+    })
+<
+
+If a source line maps to more than 64 asm lines (hot inlined loops), the
+first 64 are highlighted and the last gets a `[+N more]` virtual-text tag.
+
+==============================================================================
+8. CONFIGURATION                                              *asmview-config*
 
 Defaults: >
 
@@ -87,6 +126,8 @@ Defaults: >
       demangle = true,
       use_compile_commands = true,
       compile_commands_search_depth = 6,
+      -- `float` is accepted for backward compatibility and currently
+      -- ignored. The asm view is a vertical split as of 0.3.0.
       float = {
         width_ratio = 0.8,
         height_ratio = 0.8,
@@ -102,13 +143,15 @@ Defaults: >
 <
 
 ==============================================================================
-8. compile_commands.json                            *asmview-compile-commands*
+9. compile_commands.json                            *asmview-compile-commands*
 
 For C and C++ sources only, asmview walks up from the source file (capped at
 `compile_commands_search_depth` hops) looking for `compile_commands.json`. If
 found, it uses the matching entry's flags, stripping `argv[0]`, `-c`, `-S`,
 any `-O*`, `-o <path>`, and the input file itself. The remaining flags are
-appended before `-S` and the input file.
+appended before `-S` and the input file. `-g1` is prepended first so the
+`.loc` directives powering |asmview-line-sync| are always present (users can
+override via `cfg.compilers.<lang>.extra_args`).
 
 For Go buffers, asmview writes a self-contained temp module (`go.mod` +
 `snippet.go`) that forces `package main`, prepends the buffer's `import`
@@ -119,7 +162,7 @@ leaves the gc optimizer on. Third-party imports resolve via GOPATH,
 module proxy, or vendor directory, the same way `go build` does.
 
 ==============================================================================
-9. HEALTH                                                      *asmview-health*
+10. HEALTH                                                     *asmview-health*
 
                                                        *:checkhealth-asmview*
 :checkhealth asmview
