@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0 (2026-10-13)
+
+### Breaking Changes
+
+- side-by-side vsplit layout with source→asm line sync (#18) (b208eac)
+
+### Features
+
+- side-by-side vsplit layout with source→asm line sync (#18) (b208eac)
+
 ## 0.2.0 (2026-10-12)
 
 ### Features
